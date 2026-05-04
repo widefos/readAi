@@ -1,12 +1,11 @@
-import { 
-  Heart, 
-  Lightbulb, 
-  Highlighter, 
-  Trash2, 
-  LogOut, 
-  Library, 
+import {
+  Heart,
+  Lightbulb,
+  Highlighter,
+  Trash2,
+  Library,
   BookOpen,
-  Plus
+  Plus,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -17,11 +16,9 @@ interface SidebarProps {
   activeBook: boolean;
   activeBookTitle?: string;
   onUpload: () => void;
-  onSignOut: () => void;
-  user: any;
 }
 
-export function Sidebar({ view, setView, activeBook, activeBookTitle, onUpload, onSignOut, user }: SidebarProps) {
+export function Sidebar({ view, setView, activeBook, activeBookTitle, onUpload }: SidebarProps) {
   const navItems = [
     { id: 'bookshelf', label: '全部图书', icon: Library },
     { id: 'favorites', label: '我的喜爱', icon: Heart },
@@ -51,55 +48,45 @@ export function Sidebar({ view, setView, activeBook, activeBookTitle, onUpload, 
               if (item.id === 'bookshelf') setView('bookshelf');
             }}
             className={cn(
-              "w-full flex items-center gap-4 px-4 py-3.5 rounded-sm text-left group transition-all relative overflow-hidden",
-              view === 'bookshelf' && item.id === 'bookshelf' 
-                ? "bg-black/5 text-[#1A1A1A]" 
-                : "text-[#1A1A1A]/40 hover:bg-black/[0.02] hover:text-[#1A1A1A]/70"
+              'w-full flex items-center gap-4 px-4 py-3.5 rounded-sm text-left group transition-all relative overflow-hidden',
+              view === 'bookshelf' && item.id === 'bookshelf'
+                ? 'bg-black/5 text-[#1A1A1A]'
+                : 'text-[#1A1A1A]/40 hover:bg-black/[0.02] hover:text-[#1A1A1A]/70',
             )}
           >
             {view === 'bookshelf' && item.id === 'bookshelf' && (
-              <motion.div 
-                layoutId="nav-active"
-                className="absolute left-0 top-0 bottom-0 w-1 bg-[#1A1A1A]" 
-              />
+              <motion.div layoutId="nav-active" className="absolute left-0 top-0 bottom-0 w-1 bg-[#1A1A1A]" />
             )}
-            <item.icon className={cn(
-              "w-5 h-5 transition-transform group-hover:scale-110",
-              view === 'bookshelf' && item.id === 'bookshelf' ? "opacity-100" : "opacity-40"
-            )} />
+            <item.icon
+              className={cn(
+                'w-5 h-5 transition-transform group-hover:scale-110',
+                view === 'bookshelf' && item.id === 'bookshelf' ? 'opacity-100' : 'opacity-40',
+              )}
+            />
             <span className="text-[10px] font-bold uppercase tracking-[0.15em]">{item.label}</span>
           </button>
         ))}
 
         <div className="pt-10">
-           <div className="h-px bg-black/5 mx-4 mb-8" />
-           <p className="px-4 text-[9px] font-bold uppercase tracking-[0.3em] text-[#1A1A1A]/30 mb-4">Reading Now</p>
-           
-           <button
+          <div className="h-px bg-black/5 mx-4 mb-8" />
+          <p className="px-4 text-[9px] font-bold uppercase tracking-[0.3em] text-[#1A1A1A]/30 mb-4">Reading Now</p>
+
+          <button
             onClick={() => {
               if (activeBook) setView('reader');
             }}
             disabled={!activeBook}
             className={cn(
-              "w-full flex items-center gap-4 px-4 py-4 rounded-sm text-left group transition-all relative overflow-hidden",
-              view === 'reader' 
-                ? "bg-black/5 text-[#1A1A1A]" 
-                : "text-[#1A1A1A]/40 hover:bg-black/[0.02] hover:text-[#1A1A1A]/70",
-              !activeBook && "opacity-20 cursor-not-allowed"
+              'w-full flex items-center gap-4 px-4 py-4 rounded-sm text-left group transition-all relative overflow-hidden',
+              view === 'reader' ? 'bg-black/5 text-[#1A1A1A]' : 'text-[#1A1A1A]/40 hover:bg-black/[0.02] hover:text-[#1A1A1A]/70',
+              !activeBook && 'opacity-20 cursor-not-allowed',
             )}
           >
-            {view === 'reader' && (
-              <motion.div 
-                layoutId="nav-active"
-                className="absolute left-0 top-0 bottom-0 w-1 bg-[#1A1A1A]" 
-              />
-            )}
-            <BookOpen className={cn("w-5 h-5 shrink-0", view === 'reader' ? "opacity-100" : "opacity-40")} />
+            {view === 'reader' && <motion.div layoutId="nav-active" className="absolute left-0 top-0 bottom-0 w-1 bg-[#1A1A1A]" />}
+            <BookOpen className={cn('w-5 h-5 shrink-0', view === 'reader' ? 'opacity-100' : 'opacity-40')} />
             <div className="flex flex-col min-w-0">
               <span className="text-[10px] font-bold uppercase tracking-[0.15em]">正在阅读</span>
-              {activeBookTitle && (
-                <span className="text-[8px] opacity-40 font-bold truncate tracking-tight mt-1">{activeBookTitle}</span>
-              )}
+              {activeBookTitle && <span className="text-[8px] opacity-40 font-bold truncate tracking-tight mt-1">{activeBookTitle}</span>}
             </div>
           </button>
         </div>
@@ -116,26 +103,18 @@ export function Sidebar({ view, setView, activeBook, activeBookTitle, onUpload, 
 
         <div className="bg-white/50 backdrop-blur-sm rounded-xl p-5 border border-black/5">
           <div className="flex items-center gap-3 mb-5">
-            <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center font-bold text-[11px] ring-4 ring-black/5">
-              {user?.displayName?.charAt(0) || user?.email?.charAt(0).toUpperCase() || 'U'}
-            </div>
+            <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center font-bold text-[11px] ring-4 ring-black/5">L</div>
             <div className="flex-1 min-w-0">
-              <p className="text-[9px] font-bold uppercase truncate tracking-widest">{user?.displayName || 'Member'}</p>
+              <p className="text-[9px] font-bold uppercase truncate tracking-widest">Local Reader</p>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
-                <span className="text-[7px] text-[#1A1A1A]/40 font-bold uppercase tracking-[0.2em]">Verified Account</span>
+                <span className="text-[7px] text-[#1A1A1A]/40 font-bold uppercase tracking-[0.2em]">Local Mode</span>
               </div>
             </div>
           </div>
-          <button
-            onClick={onSignOut}
-            className="w-full flex items-center gap-2 justify-center py-2.5 bg-white rounded-lg border border-black/10 text-[8px] font-bold uppercase tracking-widest hover:bg-black hover:text-white transition-all shadow-sm active:scale-95"
-          >
-            <LogOut className="w-3 h-3" />
-            登出账户
-          </button>
+          <div className="w-full py-2.5 bg-white rounded-lg border border-black/10 text-[8px] font-bold uppercase tracking-widest text-center">Data stays on this device</div>
         </div>
-        
+
         <p className="text-center text-[7px] font-bold uppercase tracking-[0.5em] opacity-20 mt-6">Design by AI Reader</p>
       </div>
     </div>

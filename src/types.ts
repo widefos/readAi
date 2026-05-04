@@ -10,16 +10,16 @@ export interface Book {
   title: string;
   author: string;
   content: string;
-  userId: string;
   createdAt: string;
   fileType: string;
   toc?: TocItem[];
   cover?: string;
+  pdfPath?: string;
+  sourceFileName?: string;
 }
 
 export interface ReadingProgress {
   bookId: string;
-  userId: string;
   currentPage: number;
   lastReadAt: string;
   bookmarks: string[];
@@ -34,7 +34,6 @@ export interface ChatMessage {
 export interface ChatSession {
   id: string;
   bookId: string;
-  userId: string;
   messages: ChatMessage[];
   updatedAt: string;
 }

@@ -67,7 +67,7 @@ service cloud.firestore {
       allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isVerified() && isValidBook(incoming()) && isValidId(bookId);
       allow update: if isVerified() && isOwner(existing().userId) && 
-        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'author', 'content']) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'author', 'content', 'pdfUrl', 'pdfStoragePath']) &&
         incoming().content.size() <= 1048576;
       allow delete: if isSignedIn() && isOwner(existing().userId);
     }

@@ -4,9 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/copy-pdf-worker.cjs",
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
+    "desktop:dev": "concurrently \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
+    "desktop:build": "next build && electron-builder",
     "clean": "rmdir /s /q .next",
     "lint": "tsc --noEmit"
   },
@@ -21,22 +24,43 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "next": "^15.5.0",
-    "pdfjs-dist": "^5.7.284",
+    "pdfjs-dist": "4.10.38",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-dropzone": "^15.0.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "sqlite3": "^6.0.1",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.14",
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
+    "@tailwindcss/postcss": "^4.1.14",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.1",
+    "electron": "^37.0.2",
+    "electron-builder": "^26.0.12",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
-    "typescript": "~5.8.2"
+    "typescript": "~5.8.2",
+    "wait-on": "^8.0.3"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.aiinsight.reader",
+    "productName": "AI Insight Reader",
+    "files": [
+      "electron/**/*",
+      ".next/**/*",
+      "public/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": "nsis"
+    }
   }
 }
