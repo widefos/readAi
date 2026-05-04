@@ -13,9 +13,9 @@ export function UploadZone({ onClose, onUpload, isUploading }: UploadZoneProps) 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
-      const MAX_SIZE = 20 * 1024 * 1024;
+      const MAX_SIZE = 200 * 1024 * 1024;
       if (file.size > MAX_SIZE) {
-        alert(`文件太大（${(file.size / 1024 / 1024).toFixed(2)}MB）。当前仅支持最大 20MB 的源文件。`);
+        alert(`文件太大（${(file.size / 1024 / 1024).toFixed(2)}MB）。当前仅支持最大 200MB 的源文件。`);
         return;
       }
       onUpload(file);
@@ -67,7 +67,7 @@ export function UploadZone({ onClose, onUpload, isUploading }: UploadZoneProps) 
             </div>
 
             <h3 className="text-lg font-medium text-[#2C2C2C] mb-2">{isDragActive ? '松开即可导入' : '拖拽文件到此处'}</h3>
-            <p className="text-sm text-[#8A8A8A] mb-8">支持 PDF / EPUB / TXT，单文件最大 20MB</p>
+            <p className="text-sm text-[#8A8A8A] mb-8">支持 PDF / EPUB / TXT，单文件最大 200MB</p>
 
             <button className="px-6 py-2 bg-[#2C2C2C] text-white rounded-lg text-sm font-bold uppercase tracking-widest hover:bg-black transition-colors">
               选择文件

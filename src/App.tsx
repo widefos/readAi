@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { cn } from './lib/utils';
 import { Book, ChatMessage } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -8,8 +8,8 @@ import { UploadZone } from './components/UploadZone';
 import { Bookshelf } from './components/Bookshelf';
 import { askAboutBook, summarizeBook } from './services/geminiService';
 import { buildChatContext } from './engines/chatContextEngine';
-import { importBookFile } from './engines/bookImportEngine';
-import { AnimatePresence } from 'motion/react';
+import { importBookFile, resolvePdfPageCount } from './engines/bookImportEngine';
+import { AnimatePresence, motion } from 'motion/react';
 import { Loader2, Sparkles } from 'lucide-react';
 const BOOKS_KEY = 'ai-reader-books';
 const CHATS_KEY = 'ai-reader-chats';
@@ -26,23 +26,95 @@ export default function App() {
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
   const [isOverviewOpen, setIsOverviewOpen] = useState(false);
+  const [pendingDeleteBook, setPendingDeleteBook] = useState<Book | null>(null);
+  const [duplicateBook, setDuplicateBook] = useState<Book | null>(null);
   const [view, setView] = useState<'bookshelf' | 'reader'>('bookshelf');
   const [readerWidth, setReaderWidth] = useState(60);
   const [isResizing, setIsResizing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const hydratingBookIdsRef = useRef<Set<string>>(new Set());
+
+  const buildLegacyFingerprint = async (book: Book) => {
+    const raw = `${book.title}|${book.sourceFileName || ''}|${book.fileType}|${book.content}`;
+    const bytes = new TextEncoder().encode(raw);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const fuzzyScore = (query: string, target: string): number => {
+    const q = query.trim().toLowerCase();
+    const t = target.toLowerCase();
+    if (!q) return 1;
+    if (!t) return 0;
+    if (t.includes(q)) return 100 + q.length / Math.max(t.length, 1);
+
+    let qi = 0;
+    let firstMatch = -1;
+    let lastMatch = -1;
+    for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+      if (t[ti] === q[qi]) {
+        if (firstMatch === -1) firstMatch = ti;
+        lastMatch = ti;
+        qi++;
+      }
+    }
+    if (qi !== q.length) return 0;
+
+    const span = lastMatch - firstMatch + 1;
+    const compactness = q.length / Math.max(span, 1);
+    const positionBoost = 1 - firstMatch / Math.max(t.length, 1);
+    return compactness * 10 + positionBoost;
+  };
+
+  const searchedBooks = books
+    .map((book) => {
+      const score = Math.max(
+        fuzzyScore(searchQuery, book.title || ''),
+        fuzzyScore(searchQuery, book.author || ''),
+        fuzzyScore(searchQuery, book.sourceFileName || ''),
+      );
+      return { book, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.book);
 
   useEffect(() => {
     const load = async () => {
       try {
         if (window.electronAPI?.getLibraryData) {
           const data = await window.electronAPI.getLibraryData();
-          setBooks(data.books || []);
+          const loadedBooks = data.books || [];
+          const needsMigration = loadedBooks.filter((b) => !b.fingerprint);
+          if (needsMigration.length > 0) {
+            const migrated = await Promise.all(
+              loadedBooks.map(async (b) => (b.fingerprint ? b : { ...b, fingerprint: await buildLegacyFingerprint(b) })),
+            );
+            setBooks(migrated);
+            for (const b of migrated) {
+              if (window.electronAPI?.saveBook) {
+                await window.electronAPI.saveBook(b);
+              }
+            }
+          } else {
+            setBooks(loadedBooks);
+          }
           setChats(data.chats || {});
           setProgress(data.progress || {});
         } else {
           const savedBooks = JSON.parse(localStorage.getItem(BOOKS_KEY) || '[]') as Book[];
+          const needsMigration = savedBooks.filter((b) => !b.fingerprint);
+          if (needsMigration.length > 0) {
+            const migrated = await Promise.all(
+              savedBooks.map(async (b) => (b.fingerprint ? b : { ...b, fingerprint: await buildLegacyFingerprint(b) })),
+            );
+            setBooks(migrated);
+            localStorage.setItem(BOOKS_KEY, JSON.stringify(migrated));
+          } else {
+            setBooks(savedBooks);
+          }
           const savedChats = JSON.parse(localStorage.getItem(CHATS_KEY) || '{}') as Record<string, ChatMessage[]>;
           const savedProgress = JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') as Record<string, number>;
-          setBooks(savedBooks);
           setChats(savedChats);
           setProgress(savedProgress);
         }
@@ -52,6 +124,36 @@ export default function App() {
     };
     load();
   }, []);
+
+  useEffect(() => {
+    const targets = books.filter(
+      (b) => b.fileType === 'application/pdf' && b.pdfPath && (!b.pageCount || b.pageCount <= 0),
+    );
+    if (targets.length === 0) return;
+
+    for (const book of targets) {
+      if (hydratingBookIdsRef.current.has(book.id)) continue;
+      hydratingBookIdsRef.current.add(book.id);
+
+      void (async () => {
+        try {
+          const pageCount = await resolvePdfPageCount(book.pdfPath);
+          if (!pageCount || pageCount <= 0) return;
+
+          setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, pageCount } : b)));
+
+          if (window.electronAPI?.saveBook) {
+            await window.electronAPI.saveBook({ ...book, pageCount });
+          } else {
+            const nextBooks = books.map((b) => (b.id === book.id ? { ...b, pageCount } : b));
+            localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
+          }
+        } finally {
+          hydratingBookIdsRef.current.delete(book.id);
+        }
+      })();
+    }
+  }, [books]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -83,11 +185,42 @@ export default function App() {
     setIsUploading(true);
     try {
       const imported = await importBookFile(file);
+      const normalizedTitle = file.name.replace(/\.[^/.]+$/, '');
+      const duplicated = books.find((b) => {
+        if (b.fingerprint && b.fingerprint === imported.fingerprint) return true;
+        if (
+          file.type === 'application/pdf' &&
+          b.fileType === 'application/pdf' &&
+          b.title === normalizedTitle &&
+          (b.pageCount ?? -1) === (imported.pageCount ?? -1)
+        ) {
+          return true;
+        }
+        if (
+          file.type !== 'application/pdf' &&
+          b.fileType === file.type &&
+          b.title === normalizedTitle
+        ) {
+          if (b.content === imported.text) return true;
+          if (
+            b.content.length === imported.text.length &&
+            b.content.slice(0, 500) === imported.text.slice(0, 500)
+          ) {
+            return true;
+          }
+        }
+        return false;
+      });
+      if (duplicated) {
+        setDuplicateBook(duplicated);
+        return;
+      }
       const text = imported.text;
 
       const textSize = new Blob([text]).size;
-      if (textSize > 950 * 1024) {
-        throw new Error(`提取出的文本内容过大 (${(textSize / 1024 / 1024).toFixed(2)}MB)。请将文本控制在 1MB 以内后重试。`);
+      const MAX_EXTRACTED_TEXT_SIZE = 20 * 1024 * 1024;
+      if (textSize > MAX_EXTRACTED_TEXT_SIZE) {
+        throw new Error(`提取出的文本内容过大 (${(textSize / 1024 / 1024).toFixed(2)}MB)。请将文本控制在 20MB 以内后重试。`);
       }
       if (!text.trim()) {
         throw new Error('无法从文件中提取有效文本内容，请确认文件未加密且包含可识别文字。');
@@ -95,7 +228,7 @@ export default function App() {
 
       const newBook: Book = {
         id: crypto.randomUUID(),
-        title: file.name.replace(/\.[^/.]+$/, ''),
+        title: normalizedTitle,
         author: '未知作者',
         content: text,
         createdAt: new Date().toISOString(),
@@ -104,6 +237,8 @@ export default function App() {
         cover: imported.cover,
         pdfPath: imported.pdfPath,
         sourceFileName: file.name,
+        pageCount: imported.pageCount,
+        fingerprint: imported.fingerprint,
       };
 
       setBooks((prev) => [newBook, ...prev]);
@@ -196,6 +331,38 @@ export default function App() {
     }
   };
 
+  const performDeleteBook = async (book: Book) => {
+    setBooks((prev) => prev.filter((b) => b.id !== book.id));
+    setChats((prev) => {
+      const next = { ...prev };
+      delete next[book.id];
+      return next;
+    });
+    setProgress((prev) => {
+      const next = { ...prev };
+      delete next[book.id];
+      return next;
+    });
+
+    if (activeBookId === book.id) {
+      setActiveBookId(null);
+      setView('bookshelf');
+    }
+
+    if (window.electronAPI?.deleteBook) {
+      await window.electronAPI.deleteBook(book.id);
+    } else {
+      const nextBooks = books.filter((b) => b.id !== book.id);
+      const nextChats = { ...chats };
+      const nextProgress = { ...progress };
+      delete nextChats[book.id];
+      delete nextProgress[book.id];
+      localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
+      localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="h-screen w-full flex items-center justify-center bg-[#F9F8F6]">
@@ -220,7 +387,13 @@ export default function App() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                   </span>
                 </div>
-                <input type="text" placeholder="搜索我的书库..." className="w-full bg-[#f9f9fb] border-none rounded-xl py-2.5 pl-12 pr-4 text-xs font-bold tracking-tight focus:ring-1 focus:ring-black/5 placeholder:text-black/10 transition-all outline-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="搜索我的书库..."
+                  className="w-full bg-[#f9f9fb] border-none rounded-xl py-2.5 pl-12 pr-4 text-xs font-bold tracking-tight focus:ring-1 focus:ring-black/5 placeholder:text-black/10 transition-all outline-none"
+                />
               </div>
             ) : null}
           </div>
@@ -235,9 +408,10 @@ export default function App() {
         <main className={cn('flex-1 relative flex overflow-hidden bg-[#F4F1EA]', isResizing && 'pointer-events-none')}>
           {view === 'bookshelf' || !activeBook ? (
             <Bookshelf
-              books={books}
+              books={searchedBooks}
               progress={progress}
               onUploadClick={() => setIsUploadOpen(true)}
+              onDeleteBook={(book) => setPendingDeleteBook(book)}
               onSelectBook={(book) => {
                 setActiveBookId(book.id);
                 setView('reader');
@@ -287,7 +461,103 @@ export default function App() {
       </div>
 
       <AnimatePresence>{isUploadOpen && <UploadZone onClose={() => setIsUploadOpen(false)} onUpload={handleUpload} isUploading={isUploading} />}</AnimatePresence>
+
+      <AnimatePresence>
+        {pendingDeleteBook && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[300] bg-black/35 backdrop-blur-[2px] flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 16, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.98 }}
+              className="w-full max-w-md bg-[#FDFCF8] border border-black/10 rounded-xl shadow-2xl overflow-hidden"
+            >
+              <div className="px-6 py-5 border-b border-black/5">
+                <h3 className="font-serif text-xl font-bold text-[#1A1A1A]">删除书籍</h3>
+                <p className="mt-2 text-xs text-black/50 leading-relaxed">
+                  确认删除《{pendingDeleteBook.title}》吗？此操作会同时清除阅读进度与聊天记录，且不可撤销。
+                </p>
+              </div>
+              <div className="px-6 py-4 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setPendingDeleteBook(null)}
+                  className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider border border-black/10 rounded-lg hover:bg-black/[0.03]"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={async () => {
+                    const target = pendingDeleteBook;
+                    setPendingDeleteBook(null);
+                    if (target) await performDeleteBook(target);
+                  }}
+                  className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider bg-red-600 text-white rounded-lg hover:bg-red-700"
+                >
+                  确认删除
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {duplicateBook && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[320] bg-black/30 backdrop-blur-[2px] flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 16, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.98 }}
+              className="w-full max-w-md bg-[#FDFCF8] border border-black/10 rounded-xl shadow-2xl overflow-hidden"
+            >
+              <div className="px-6 py-5 border-b border-black/5">
+                <h3 className="font-serif text-xl font-bold text-[#1A1A1A]">重复上传提醒</h3>
+                <p className="mt-2 text-xs text-black/50 leading-relaxed">
+                  这本书已经在你的书架中。你可以直接打开已有条目继续阅读。
+                </p>
+              </div>
+              <div className="px-6 py-4 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => {
+                    setDuplicateBook(null);
+                    setIsUploadOpen(false);
+                  }}
+                  className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider border border-black/10 rounded-lg hover:bg-black/[0.03]"
+                >
+                  仅关闭
+                </button>
+                <button
+                  onClick={() => {
+                    const target = duplicateBook;
+                    setDuplicateBook(null);
+                    setIsUploadOpen(false);
+                    if (target) {
+                      setActiveBookId(target.id);
+                      setView('reader');
+                    }
+                  }}
+                  className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider bg-black text-white rounded-lg hover:bg-[#111]"
+                >
+                  打开已有书籍
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
+
+
+
 

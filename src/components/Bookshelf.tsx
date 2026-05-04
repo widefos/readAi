@@ -1,16 +1,39 @@
-﻿import React from 'react';
-import { motion } from 'motion/react';
-import { Book as BookIcon, Plus } from 'lucide-react';
+﻿import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Book as BookIcon, Plus, Trash2 } from 'lucide-react';
 import { Book } from '../types';
 
 interface BookshelfProps {
   books: Book[];
   onSelectBook: (book: Book) => void;
   onUploadClick: () => void;
+  onDeleteBook: (book: Book) => void;
   progress: Record<string, number>;
 }
 
-export function Bookshelf({ books, onSelectBook, onUploadClick, progress }: BookshelfProps) {
+export function Bookshelf({ books, onSelectBook, onUploadClick, onDeleteBook, progress }: BookshelfProps) {
+  const [menuBookId, setMenuBookId] = useState<string | null>(null);
+
+  const calcPercent = (currentPage: number, totalPages: number) => {
+    if (totalPages <= 1) return 100;
+    const ratio = currentPage / (totalPages - 1);
+    return Math.round(Math.max(0, Math.min(1, ratio)) * 100);
+  };
+
+  const getTotalPages = (book: Book) => {
+    if (book.fileType === 'application/pdf') {
+      return book.pageCount;
+    }
+    const paragraphs = book.content.split('\n').filter((p) => p.trim().length > 0);
+    return Math.ceil(paragraphs.length / 8) || 1;
+  };
+
+  useEffect(() => {
+    const onGlobalClick = () => setMenuBookId(null);
+    window.addEventListener('click', onGlobalClick);
+    return () => window.removeEventListener('click', onGlobalClick);
+  }, []);
+
   return (
     <div className="flex-1 bg-transparent overflow-y-auto p-12">
       <div className="max-w-7xl mx-auto">
@@ -27,9 +50,17 @@ export function Bookshelf({ books, onSelectBook, onUploadClick, progress }: Book
               transition={{ delay: index * 0.05 }}
               key={book.id}
               onClick={() => onSelectBook(book)}
-              className="group cursor-pointer"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenuBookId((prev) => (prev === book.id ? null : book.id));
+              }}
+              className="group cursor-pointer relative"
             >
-              <div className="relative aspect-[7/10] mb-4 bg-white rounded-xs shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] group-hover:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.2)] transition-all duration-700 overflow-hidden transform group-hover:-translate-y-3">
+              <div
+                className={`relative aspect-[7/10] mb-4 bg-white rounded-xs shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] group-hover:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.2)] transition-all duration-700 overflow-hidden transform group-hover:-translate-y-3 ${
+                  menuBookId === book.id ? 'ring-2 ring-black/20' : ''
+                }`}
+              >
                 {book.cover ? (
                   <img src={book.cover} alt={book.title} className="w-full h-full object-cover grayscale-[0.2] group-hover:grayscale-0 transition-all duration-700" referrerPolicy="no-referrer" />
                 ) : (
@@ -41,11 +72,11 @@ export function Bookshelf({ books, onSelectBook, onUploadClick, progress }: Book
                 )}
 
                 {(() => {
-                  const paragraphs = book.content.split('\n').filter((p) => p.trim().length > 0);
-                  const totalPages = Math.ceil(paragraphs.length / 8) || 1;
                   const currentP = progress[book.id];
                   if (currentP === undefined) return null;
-                  const percent = Math.round(((currentP + 1) / totalPages) * 100);
+                  const totalPages = getTotalPages(book);
+                  if (!totalPages || totalPages <= 1) return null;
+                  const percent = calcPercent(currentP, totalPages);
 
                   return (
                     <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/5 backdrop-blur-sm">
@@ -63,16 +94,40 @@ export function Bookshelf({ books, onSelectBook, onUploadClick, progress }: Book
                   <span className="text-[8px] uppercase tracking-[0.15em] opacity-30 font-bold truncate max-w-[60%]">{book.author || 'Anonymous'}</span>
                   <div className="h-[1px] bg-black/5 flex-1" />
                   {(() => {
-                    const paragraphs = book.content.split('\n').filter((p) => p.trim().length > 0);
-                    const totalPages = Math.ceil(paragraphs.length / 8) || 1;
                     const currentP = progress[book.id];
                     if (currentP === undefined) return <span className="text-[8px] font-bold text-black/20 uppercase tracking-tighter">未读</span>;
-                    const percent = Math.round(((currentP + 1) / totalPages) * 100);
+                    const totalPages = getTotalPages(book);
+                    if (!totalPages || totalPages <= 1) return <span className="text-[8px] font-bold text-black/20 uppercase tracking-tighter">--</span>;
+                    const percent = calcPercent(currentP, totalPages);
                     return <span className="text-[8px] font-bold text-indigo-500 uppercase tracking-tighter">{percent}%</span>;
                   })()}
                 </div>
                 {progress[book.id] !== undefined && <p className="text-[7px] font-bold opacity-20 uppercase tracking-widest mt-1">已读至第 {progress[book.id] + 1} 页</p>}
               </div>
+
+              <AnimatePresence>
+                {menuBookId === book.id && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 14, x: -8, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, x: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, x: -6, scale: 0.96 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    className="absolute right-2 top-[36%] z-[200] bg-white shadow-[0_14px_30px_rgba(0,0,0,0.12)] rounded-2xl overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => {
+                        onDeleteBook(book);
+                        setMenuBookId(null);
+                      }}
+                      className="w-full flex items-center gap-2 px-5 py-4 text-sm font-semibold text-[#666] hover:bg-[#F7F7F7] transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4 text-red-500" />
+                      删除
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           ))}
 

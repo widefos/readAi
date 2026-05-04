@@ -5,6 +5,7 @@ declare global {
     electronAPI?: {
       saveBookFile: (payload: { fileName: string; bytes: number[] }) => Promise<{ path: string }>;
       readBookFile: (fullPath: string) => Promise<number[]>;
+      getPdfUrl: (fullPath: string) => Promise<string>;
       getLibraryData: () => Promise<{
         books: import('./types').Book[];
         chats: Record<string, import('./types').ChatMessage[]>;
@@ -18,4 +19,3 @@ declare global {
     };
   }
 }
-

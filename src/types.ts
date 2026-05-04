@@ -1,4 +1,4 @@
-export interface TocItem {
+﻿export interface TocItem {
   label: string;
   href?: string;
   position?: number; // Position in the paragraphs list (index)
@@ -16,6 +16,8 @@ export interface Book {
   cover?: string;
   pdfPath?: string;
   sourceFileName?: string;
+  pageCount?: number;
+  fingerprint?: string;
 }
 
 export interface ReadingProgress {
@@ -37,3 +39,5 @@ export interface ChatSession {
   messages: ChatMessage[];
   updatedAt: string;
 }
+
+

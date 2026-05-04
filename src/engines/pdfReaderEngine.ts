@@ -4,7 +4,7 @@ import { Book } from '../types';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
-export function usePdfReaderEngine(book: Book, currentPage: number, canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+export function usePdfReaderEngine(book: Book, currentPage: number, pdfScale: number, canvasRef: React.RefObject<HTMLCanvasElement | null>) {
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [pdfTotalPages, setPdfTotalPages] = useState(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -26,8 +26,14 @@ export function usePdfReaderEngine(book: Book, currentPage: number, canvasRef: R
           setPdfError('当前环境无法读取本地 PDF（请在 Electron 桌面端运行）。');
           return;
         }
-        const bytes = await window.electronAPI.readBookFile(book.pdfPath);
-        const loadedPdf = await pdfjsLib.getDocument({ data: Uint8Array.from(bytes) }).promise;
+        const url = window.electronAPI.getPdfUrl ? await window.electronAPI.getPdfUrl(book.pdfPath) : undefined;
+        if (!url) {
+          setPdfDoc(null);
+          setPdfTotalPages(0);
+          setPdfError('无法获取本地 PDF 地址。');
+          return;
+        }
+        const loadedPdf = await pdfjsLib.getDocument({ url, withCredentials: false }).promise;
         if (!isMounted) return;
         setPdfDoc(loadedPdf);
         setPdfTotalPages(loadedPdf.numPages || 0);
@@ -51,7 +57,7 @@ export function usePdfReaderEngine(book: Book, currentPage: number, canvasRef: R
     const render = async () => {
       const pageNumber = Math.min(currentPage + 1, pdfTotalPages);
       const page = await pdfDoc.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 1.4 });
+      const viewport = page.getViewport({ scale: pdfScale });
       const canvas = canvasRef.current!;
       const context = canvas.getContext('2d');
       if (!context) return;
@@ -60,7 +66,7 @@ export function usePdfReaderEngine(book: Book, currentPage: number, canvasRef: R
       await page.render({ canvasContext: context, viewport }).promise;
     };
     void render();
-  }, [book.fileType, canvasRef, pdfDoc, pdfTotalPages, currentPage]);
+  }, [book.fileType, canvasRef, pdfDoc, pdfTotalPages, currentPage, pdfScale]);
 
   const openWithSystemViewer = async () => {
     if (!book.pdfPath || !window.electronAPI?.openPdfInDefaultViewer) return;

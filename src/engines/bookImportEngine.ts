@@ -1,10 +1,50 @@
 ﻿import ePub from 'epubjs';
+import * as pdfjsLib from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+const FULL_HASH_THRESHOLD = 8 * 1024 * 1024;
 
 export interface ImportedBookData {
   text: string;
   toc: any[];
   cover?: string;
   pdfPath?: string;
+  pageCount?: number;
+  fingerprint: string;
+}
+
+export async function resolvePdfPageCount(pdfPath?: string): Promise<number | undefined> {
+  if (!pdfPath || !window.electronAPI?.getPdfUrl) return undefined;
+  try {
+    const url = await window.electronAPI.getPdfUrl(pdfPath);
+    if (!url) return undefined;
+    const loadingTask = pdfjsLib.getDocument({ url, withCredentials: false });
+    const loadedPdf = await loadingTask.promise;
+    return loadedPdf.numPages || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildFingerprint(file: File): Promise<string> {
+  let buffer: ArrayBuffer;
+  if (file.size <= FULL_HASH_THRESHOLD) {
+    // Small files: hash full content for strongest deduplication.
+    buffer = await file.arrayBuffer();
+  } else {
+    // Larger files: hash sampled content + stable metadata to reduce import latency.
+    const head = await file.slice(0, 128 * 1024).arrayBuffer();
+    const tail = await file.slice(Math.max(0, file.size - 128 * 1024), file.size).arrayBuffer();
+    const meta = `${file.type}|${file.size}`;
+    const merged = new Uint8Array(head.byteLength + tail.byteLength + meta.length);
+    merged.set(new Uint8Array(head), 0);
+    merged.set(new Uint8Array(tail), head.byteLength);
+    for (let i = 0; i < meta.length; i++) merged[head.byteLength + tail.byteLength + i] = meta.charCodeAt(i);
+    buffer = merged.buffer;
+  }
+
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function savePdfToLocal(file: File): Promise<string | undefined> {
@@ -17,16 +57,49 @@ async function savePdfToLocal(file: File): Promise<string | undefined> {
   return result.path;
 }
 
-async function importPdf(file: File): Promise<ImportedBookData> {
+async function extractPdfCover(file: File): Promise<string | undefined> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const loadingTask = pdfjsLib.getDocument({ data: bytes });
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1);
+    const baseViewport = page.getViewport({ scale: 1 });
+    if (!baseViewport.width || !baseViewport.height) return undefined;
+
+    const targetWidth = 280;
+    const scale = targetWidth / baseViewport.width;
+    const viewport = page.getViewport({ scale });
+
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return undefined;
+
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
+    await page.render({ canvasContext: context, viewport }).promise;
+    return canvas.toDataURL('image/jpeg', 0.82);
+  } catch {
+    return undefined;
+  }
+}
+
+async function importPdf(file: File): Promise<Omit<ImportedBookData, 'fingerprint'>> {
   const pdfPath = await savePdfToLocal(file);
+  const cover = await extractPdfCover(file);
+  // Extracting page count during upload causes large-PDF import latency.
+  // We defer this and keep upload path fast.
+  const pageCount: number | undefined = undefined;
+
   return {
     text: `PDF 文件：${file.name}\n已导入本地，可直接阅读。`,
     toc: [],
+    cover,
     pdfPath,
+    pageCount,
   };
 }
 
-async function importEpub(file: File): Promise<ImportedBookData> {
+async function importEpub(file: File): Promise<Omit<ImportedBookData, 'fingerprint'>> {
   const arrayBuffer = await file.arrayBuffer();
   const book = ePub(arrayBuffer);
   await book.ready;
@@ -56,9 +129,7 @@ async function importEpub(file: File): Promise<ImportedBookData> {
       const parser = new DOMParser();
       const doc = (typeof resource === 'string' ? parser.parseFromString(resource, 'text/html') : resource) as Document;
       const content = doc.body?.innerText || doc.body?.textContent || '';
-      if (content.trim()) {
-        text += `${content.trim()}\n\n`;
-      }
+      if (content.trim()) text += `${content.trim()}\n\n`;
     } catch {
       // ignore chapter parse failure
     }
@@ -81,12 +152,13 @@ async function importEpub(file: File): Promise<ImportedBookData> {
   return { text, toc, cover };
 }
 
-async function importText(file: File): Promise<ImportedBookData> {
+async function importText(file: File): Promise<Omit<ImportedBookData, 'fingerprint'>> {
   return { text: await file.text(), toc: [] };
 }
 
 export async function importBookFile(file: File): Promise<ImportedBookData> {
-  if (file.type === 'application/pdf') return importPdf(file);
-  if (file.type === 'application/epub+zip' || file.name.endsWith('.epub')) return importEpub(file);
-  return importText(file);
+  const fingerprint = await buildFingerprint(file);
+  if (file.type === 'application/pdf') return { ...(await importPdf(file)), fingerprint };
+  if (file.type === 'application/epub+zip' || file.name.endsWith('.epub')) return { ...(await importEpub(file)), fingerprint };
+  return { ...(await importText(file)), fingerprint };
 }

@@ -1,13 +1,17 @@
 ﻿const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const http = require('http');
 const path = require('path');
 const fs = require('fs/promises');
+const fsNative = require('fs');
 const { spawn } = require('child_process');
 const sqlite3 = require('sqlite3').verbose();
 
 const isDev = !app.isPackaged;
 let mainWindow;
 let nextServer;
+let bookServer;
 let db;
+const BOOK_SERVER_PORT = 3210;
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -40,8 +44,20 @@ async function initDb() {
     toc TEXT,
     cover TEXT,
     pdfPath TEXT,
-    sourceFileName TEXT
+    sourceFileName TEXT,
+    pageCount INTEGER,
+    fingerprint TEXT
   )`);
+  try {
+    await run('ALTER TABLE books ADD COLUMN pageCount INTEGER');
+  } catch {
+    // ignore when column already exists
+  }
+  try {
+    await run('ALTER TABLE books ADD COLUMN fingerprint TEXT');
+  } catch {
+    // ignore when column already exists
+  }
   await run(`CREATE TABLE IF NOT EXISTS chats (
     bookId TEXT PRIMARY KEY,
     messages TEXT NOT NULL,
@@ -58,6 +74,64 @@ async function ensureBooksDir() {
   const dir = path.join(app.getPath('userData'), 'books');
   await fs.mkdir(dir, { recursive: true });
   return dir;
+}
+
+function startBookServer() {
+  if (bookServer) return;
+
+  bookServer = http.createServer(async (req, res) => {
+    try {
+      const requestUrl = new URL(req.url, `http://127.0.0.1:${BOOK_SERVER_PORT}`);
+      if (requestUrl.pathname !== '/book') {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+
+      const fullPath = path.resolve(decodeURIComponent(requestUrl.searchParams.get('path') || ''));
+      const booksDir = path.resolve(path.join(app.getPath('userData'), 'books'));
+      if (!fullPath.startsWith(booksDir)) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+
+      const stat = await fs.stat(fullPath);
+      const range = req.headers.range;
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'application/pdf');
+
+      if (range) {
+        const match = /bytes=(\d+)-(\d*)/.exec(range);
+        if (!match) {
+          res.writeHead(416);
+          res.end();
+          return;
+        }
+
+        const start = Number(match[1]);
+        const end = match[2] ? Number(match[2]) : stat.size - 1;
+        const chunkSize = end - start + 1;
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+          'Content-Length': chunkSize,
+        });
+        fsNative.createReadStream(fullPath, { start, end }).pipe(res);
+        return;
+      }
+
+      res.writeHead(200, {
+        'Content-Length': stat.size,
+      });
+      fsNative.createReadStream(fullPath).pipe(res);
+    } catch (error) {
+      res.writeHead(500);
+      res.end(error?.message || 'Internal server error');
+    }
+  });
+
+  bookServer.listen(BOOK_SERVER_PORT, '127.0.0.1');
 }
 
 async function startNextServer() {
@@ -88,6 +162,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   await initDb();
+  startBookServer();
   await startNextServer();
   createWindow();
 
@@ -102,6 +177,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('books:read-file', async (_event, fullPath) => {
     const bytes = await fs.readFile(fullPath);
     return Array.from(bytes);
+  });
+
+  ipcMain.handle('books:get-pdf-url', async (_event, fullPath) => {
+    const encodedPath = encodeURIComponent(path.resolve(fullPath));
+    return `http://127.0.0.1:${BOOK_SERVER_PORT}/book?path=${encodedPath}`;
   });
 
   ipcMain.handle('library:get-all', async () => {
@@ -126,8 +206,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('library:save-book', async (_event, book) => {
     await run(
-      `INSERT INTO books (id,title,author,content,createdAt,fileType,toc,cover,pdfPath,sourceFileName)
-       VALUES (?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO books (id,title,author,content,createdAt,fileType,toc,cover,pdfPath,sourceFileName,pageCount,fingerprint)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET
          title=excluded.title,
          author=excluded.author,
@@ -137,7 +217,9 @@ app.whenReady().then(async () => {
          toc=excluded.toc,
          cover=excluded.cover,
          pdfPath=excluded.pdfPath,
-         sourceFileName=excluded.sourceFileName`,
+         sourceFileName=excluded.sourceFileName,
+         pageCount=excluded.pageCount,
+         fingerprint=excluded.fingerprint`,
       [
         book.id,
         book.title,
@@ -149,6 +231,8 @@ app.whenReady().then(async () => {
         book.cover || null,
         book.pdfPath || null,
         book.sourceFileName || null,
+        book.pageCount || null,
+        book.fingerprint || null,
       ],
     );
     return { ok: true };
@@ -203,10 +287,12 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   if (nextServer) nextServer.kill();
+  if (bookServer) bookServer.close();
 });
-
 
 ipcMain.handle('books:open-in-default-viewer', async (_event, fullPath) => {
   const result = await shell.openPath(fullPath);
   return { ok: !result, message: result || null };
 });
+
+

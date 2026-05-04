@@ -22,12 +22,13 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
   const [theme, setTheme] = useState<'paper' | 'light' | 'dark'>('paper');
   const [animationType, setAnimationType] = useState<'fade' | 'slide' | 'slide-up' | 'none'>('fade');
   const [animationSpeed, setAnimationSpeed] = useState(0.5);
+  const [pdfScale, setPdfScale] = useState(1.4);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTocOpen, setIsTocOpen] = useState(false);
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
-  const { pdfTotalPages, pdfError, openWithSystemViewer } = usePdfReaderEngine(book, currentPage, pdfCanvasRef);
+  const { pdfTotalPages, pdfError, openWithSystemViewer } = usePdfReaderEngine(book, currentPage, pdfScale, pdfCanvasRef);
 
   const isPdfBook = book.fileType === 'application/pdf';
   const itemsPerPage = 8;
@@ -37,6 +38,11 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
   const readingTime = Math.ceil(wordCount / 200);
   const fileSize = (new Blob([book.content]).size / 1024).toFixed(1);
   const currentParagraphs = engine.getParagraphPage(currentPage);
+  const calcPercent = (page: number, pages: number) => {
+    if (pages <= 1) return 100;
+    const ratio = page / (pages - 1);
+    return Math.round(Math.max(0, Math.min(1, ratio)) * 100);
+  };
 
   const themeClasses = {
     light: 'bg-white text-[#1A1A1A]',
@@ -88,6 +94,23 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
       setSelection(null);
       window.getSelection()?.removeAllRanges();
     }
+  };
+
+  const handleCtrlWheel = (e: React.WheelEvent<HTMLElement>) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const zoomIn = e.deltaY < 0;
+    if (isPdfBook) {
+      setPdfScale((prev) => {
+        const next = zoomIn ? prev + 0.1 : prev - 0.1;
+        return Math.max(0.6, Math.min(3, Number(next.toFixed(2))));
+      });
+      return;
+    }
+    setFontSize((prev) => {
+      const next = zoomIn ? prev + 1 : prev - 1;
+      return Math.max(14, Math.min(40, next));
+    });
   };
 
   const getAnimationProps = () => {
@@ -174,7 +197,7 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
         )}
       </AnimatePresence>
 
-      <main ref={contentRef} onMouseUp={handleMouseUp} className="flex-1 overflow-y-auto px-12 pb-12 relative">
+      <main ref={contentRef} onMouseUp={handleMouseUp} onWheel={handleCtrlWheel} className="flex-1 overflow-y-auto px-12 pb-12 relative">
         <div className="max-w-3xl mx-auto">
           {isPdfBook ? (
             <div className="flex justify-center py-6">
@@ -221,7 +244,7 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
           <button disabled={currentPage >= totalPages - 1} onClick={() => onPageChange(currentPage + 1)} className="hover:opacity-100 opacity-40 transition-opacity disabled:opacity-10">下一页</button>
         </div>
         <div className="flex items-center gap-4 relative">
-          <span className="opacity-40">已读 {Math.round(((currentPage + 1) / totalPages) * 100)}%</span>
+          <span className="opacity-40">已读 {calcPercent(currentPage, totalPages)}%</span>
           <div className="relative">
             <button onClick={() => setIsSettingsOpen(!isSettingsOpen)} className="opacity-40 hover:opacity-100 transition-opacity"><Settings className="w-3.5 h-3.5" /></button>
             <AnimatePresence>
