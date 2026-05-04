@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "Book": {
+      "title": "Book",
+      "description": "Represents a book or document uploaded by the user.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Title of the book" },
+        "author": { "type": "string", "description": "Author of the book" },
+        "content": { "type": "string", "description": "The full text content of the book for AI analysis" },
+        "userId": { "type": "string", "description": "Owner of the book" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "fileType": { "type": "string", "enum": ["text/plain", "application/pdf"], "description": "Original file mime type" }
+      },
+      "required": ["title", "content", "userId", "createdAt"]
+    },
+    "ReadingProgress": {
+      "title": "Reading Progress",
+      "description": "Tracks a user's progress in a specific book.",
+      "type": "object",
+      "properties": {
+        "bookId": { "type": "string" },
+        "userId": { "type": "string" },
+        "currentPage": { "type": "integer" },
+        "lastReadAt": { "type": "string", "format": "date-time" },
+        "bookmarks": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["bookId", "userId", "currentPage"]
+    },
+    "ChatSession": {
+      "title": "Chat Session",
+      "description": "A conversation between the user and AI about a specific book.",
+      "type": "object",
+      "properties": {
+        "bookId": { "type": "string" },
+        "userId": { "type": "string" },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["user", "model"] },
+              "content": { "type": "string" },
+              "timestamp": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookId", "userId", "messages"]
+    }
+  },
+  "firestore": {
+    "/books/{bookId}": {
+      "schema": "Book",
+      "description": "Store uploaded books"
+    },
+    "/progress/{progressId}": {
+      "schema": "ReadingProgress",
+      "description": "Store individual reading progress per book and user"
+    },
+    "/chats/{chatId}": {
+      "schema": "ChatSession",
+      "description": "Store chat history related to books"
+    }
+  }
+}

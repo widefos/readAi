@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Serif+SC:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Noto Serif SC", "Georgia", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-[#F4F1EA] text-[#1A1A1A] font-sans antialiased;
+  }
+}
+
+.editorial-border {
+  @apply border-[#1A1A1A];
+}
+
+.bg-paper {
+  @apply bg-[#FDFCF8];
+}
+
+.ai-glow {
+  box-shadow: 0 0 20px rgba(79, 70, 229, 0.1);
+}
+
+.markdown-body {
+  @apply space-y-4;
+}
+
+.markdown-body p {
+  @apply leading-relaxed;
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  @apply font-bold mt-4 mb-2;
+}
+
+.markdown-body h1 { @apply text-lg; }
+.markdown-body h2 { @apply text-base; }
+.markdown-body h3 { @apply text-sm; }
+
+.markdown-body ul {
+  @apply list-disc pl-5 space-y-1;
+}
+
+.markdown-body ol {
+  @apply list-decimal pl-5 space-y-1;
+}
+
+.markdown-body code {
+  @apply bg-black/5 px-1 rounded font-mono text-[0.9em];
+}
+
+.markdown-body pre {
+  @apply bg-black/5 p-3 rounded font-mono text-xs overflow-x-auto my-2;
+}
+
+.markdown-body blockquote {
+  @apply border-l-2 border-black/20 pl-4 py-1 italic opacity-80;
+}

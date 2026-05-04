@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && userId != null && request.auth.uid == userId;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidBook(data) {
+      return data.keys().hasAll(['title', 'content', 'userId', 'createdAt']) &&
+             data.keys().size() <= 12 &&
+             data.title is string && data.title.size() <= 200 &&
+             data.content is string && data.content.size() <= 1048576 && 
+             data.userId == request.auth.uid &&
+             data.createdAt == request.time &&
+             (!('toc' in data) || data.toc is list);
+    }
+
+    function isValidProgress(data) {
+      return data.keys().hasAll(['bookId', 'userId', 'currentPage', 'lastReadAt']) &&
+             data.bookId is string &&
+             data.userId == request.auth.uid &&
+             data.currentPage is int &&
+             data.lastReadAt == request.time;
+    }
+
+    function isValidChat(data) {
+      return data.keys().hasAll(['bookId', 'userId', 'messages', 'updatedAt']) &&
+             data.bookId is string &&
+             data.userId == request.auth.uid &&
+             data.messages is list &&
+             data.messages.size() <= 1000 &&
+             data.updatedAt == request.time;
+    }
+
+    // --- Collection Rules ---
+
+    match /books/{bookId} {
+      allow get: if isSignedIn() && (resource == null || isOwner(resource.data.userId));
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isVerified() && isValidBook(incoming()) && isValidId(bookId);
+      allow update: if isVerified() && isOwner(existing().userId) && 
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'author', 'content']) &&
+        incoming().content.size() <= 1048576;
+      allow delete: if isSignedIn() && isOwner(existing().userId);
+    }
+
+    match /progress/{progressId} {
+      allow get: if isSignedIn() && (resource == null || isOwner(resource.data.userId));
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isVerified() && isValidProgress(incoming()) && isValidId(progressId);
+      allow update: if isVerified() &&
+        isOwner(existing().userId) &&
+        isValidProgress(incoming()) &&
+        incoming().bookId == existing().bookId &&
+        incoming().userId == existing().userId;
+      allow delete: if isSignedIn() && isOwner(existing().userId);
+    }
+
+    match /chats/{chatId} {
+      allow get: if isSignedIn() && (resource == null || isOwner(resource.data.userId));
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isVerified() && isValidChat(incoming()) && isValidId(chatId);
+      allow update: if isVerified() &&
+        isOwner(existing().userId) &&
+        isValidChat(incoming()) &&
+        incoming().bookId == existing().bookId &&
+        incoming().userId == existing().userId;
+      allow delete: if isSignedIn() && isOwner(existing().userId);
+    }
+  }
+}

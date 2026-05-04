@@ -1,0 +1,10 @@
+{
+  "name": "AI 智阅 (AI Insight Reader)",
+  "description": "一个具备全书逻辑关联、深度总结与智能问答能力的 AI 辅助阅读器，支持长文本深度解析。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "AI 内容总结",
+    "长文本知识库问答",
+    "PDF 阅读与标注"
+  ]
+}
