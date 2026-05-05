@@ -1,4 +1,4 @@
-import {
+﻿import {
   Heart,
   Lightbulb,
   Highlighter,
@@ -13,12 +13,11 @@ import { cn } from '../lib/utils';
 interface SidebarProps {
   view: 'bookshelf' | 'reader';
   setView: (view: 'bookshelf' | 'reader') => void;
-  activeBook: boolean;
-  activeBookTitle?: string;
+  hasOpenReaderTabs?: boolean;
   onUpload: () => void;
 }
 
-export function Sidebar({ view, setView, activeBook, activeBookTitle, onUpload }: SidebarProps) {
+export function Sidebar({ view, setView, hasOpenReaderTabs = false, onUpload }: SidebarProps) {
   const navItems = [
     { id: 'bookshelf', label: '全部图书', icon: Library },
     { id: 'favorites', label: '我的喜爱', icon: Heart },
@@ -67,27 +66,22 @@ export function Sidebar({ view, setView, activeBook, activeBookTitle, onUpload }
           </button>
         ))}
 
-        <div className="pt-10">
-          <div className="h-px bg-black/5 mx-4 mb-8" />
-          <p className="px-4 text-[9px] font-bold uppercase tracking-[0.3em] text-[#1A1A1A]/30 mb-4">Reading Now</p>
-
+        <div className="pt-8 mt-6 border-t border-black/5">
           <button
-            onClick={() => {
-              if (activeBook) setView('reader');
-            }}
-            disabled={!activeBook}
+            onClick={() => setView('reader')}
             className={cn(
-              'w-full flex items-center gap-4 px-4 py-4 rounded-sm text-left group transition-all relative overflow-hidden',
-              view === 'reader' ? 'bg-black/5 text-[#1A1A1A]' : 'text-[#1A1A1A]/40 hover:bg-black/[0.02] hover:text-[#1A1A1A]/70',
-              !activeBook && 'opacity-20 cursor-not-allowed',
+              'w-full flex items-center gap-4 px-4 py-3.5 rounded-sm text-left group transition-all relative overflow-hidden',
+              view === 'reader'
+                ? 'bg-black/5 text-[#1A1A1A]'
+                : 'text-[#1A1A1A]/40 hover:bg-black/[0.02] hover:text-[#1A1A1A]/70',
+              !hasOpenReaderTabs && 'opacity-60',
             )}
           >
-            {view === 'reader' && <motion.div layoutId="nav-active" className="absolute left-0 top-0 bottom-0 w-1 bg-[#1A1A1A]" />}
-            <BookOpen className={cn('w-5 h-5 shrink-0', view === 'reader' ? 'opacity-100' : 'opacity-40')} />
-            <div className="flex flex-col min-w-0">
-              <span className="text-[10px] font-bold uppercase tracking-[0.15em]">正在阅读</span>
-              {activeBookTitle && <span className="text-[8px] opacity-40 font-bold truncate tracking-tight mt-1">{activeBookTitle}</span>}
-            </div>
+            {view === 'reader' && (
+              <motion.div layoutId="nav-active" className="absolute left-0 top-0 bottom-0 w-1 bg-[#1A1A1A]" />
+            )}
+            <BookOpen className={cn('w-5 h-5 transition-transform group-hover:scale-110', view === 'reader' ? 'opacity-100' : 'opacity-40')} />
+            <span className="text-[10px] font-bold uppercase tracking-[0.15em]">阅读</span>
           </button>
         </div>
       </nav>

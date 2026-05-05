@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from './lib/utils';
 import { Book, ChatMessage } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -10,10 +10,11 @@ import { askAboutBook, summarizeBook } from './services/geminiService';
 import { buildChatContext } from './engines/chatContextEngine';
 import { importBookFile, resolvePdfPageCount } from './engines/bookImportEngine';
 import { AnimatePresence, motion } from 'motion/react';
-import { Loader2, Sparkles } from 'lucide-react';
+import { Loader2, Sparkles, X } from 'lucide-react';
 const BOOKS_KEY = 'ai-reader-books';
 const CHATS_KEY = 'ai-reader-chats';
 const PROGRESS_KEY = 'ai-reader-progress';
+const PROGRESS_ANCHOR_KEY = 'ai-reader-progress-anchor';
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
@@ -24,15 +25,21 @@ export default function App() {
   const [chats, setChats] = useState<Record<string, ChatMessage[]>>({});
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [progress, setProgress] = useState<Record<string, number>>({});
+  const [progressAnchors, setProgressAnchors] = useState<Record<string, number>>({});
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
   const [isOverviewOpen, setIsOverviewOpen] = useState(false);
   const [pendingDeleteBook, setPendingDeleteBook] = useState<Book | null>(null);
   const [duplicateBook, setDuplicateBook] = useState<Book | null>(null);
   const [view, setView] = useState<'bookshelf' | 'reader'>('bookshelf');
+  const [openReaderBookIds, setOpenReaderBookIds] = useState<string[]>([]);
+  const [draggingBookId, setDraggingBookId] = useState<string | null>(null);
+  const [dragOverTab, setDragOverTab] = useState<{ bookId: string; side: 'left' | 'right' } | null>(null);
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; bookId: string } | null>(null);
   const [readerWidth, setReaderWidth] = useState(60);
   const [isResizing, setIsResizing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const hydratingBookIdsRef = useRef<Set<string>>(new Set());
+  const progressRef = useRef<Record<string, number>>({});
 
   const buildLegacyFingerprint = async (book: Book) => {
     const raw = `${book.title}|${book.sourceFileName || ''}|${book.fileType}|${book.content}`;
@@ -101,6 +108,7 @@ export default function App() {
           }
           setChats(data.chats || {});
           setProgress(data.progress || {});
+          setProgressAnchors(data.progressAnchors || {});
         } else {
           const savedBooks = JSON.parse(localStorage.getItem(BOOKS_KEY) || '[]') as Book[];
           const needsMigration = savedBooks.filter((b) => !b.fingerprint);
@@ -115,8 +123,10 @@ export default function App() {
           }
           const savedChats = JSON.parse(localStorage.getItem(CHATS_KEY) || '{}') as Record<string, ChatMessage[]>;
           const savedProgress = JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') as Record<string, number>;
+          const savedAnchors = JSON.parse(localStorage.getItem(PROGRESS_ANCHOR_KEY) || '{}') as Record<string, number>;
           setChats(savedChats);
           setProgress(savedProgress);
+          setProgressAnchors(savedAnchors);
         }
       } finally {
         setIsLoading(false);
@@ -124,6 +134,10 @@ export default function App() {
     };
     load();
   }, []);
+
+  useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
 
   useEffect(() => {
     const targets = books.filter(
@@ -180,6 +194,57 @@ export default function App() {
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isResizing]);
+
+  useEffect(() => {
+    if (!tabMenu) return;
+    const closeMenu = () => setTabMenu(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [tabMenu]);
+
+  const closeReaderTab = (bookId: string) => {
+    setOpenReaderBookIds((prev) => {
+      const next = prev.filter((id) => id !== bookId);
+      if (bookId === activeBookId) {
+        setActiveBookId(next[0] ?? null);
+        if (next.length === 0) setView('bookshelf');
+      }
+      return next;
+    });
+  };
+
+  const closeOtherTabs = (bookId: string) => {
+    setOpenReaderBookIds([bookId]);
+    setActiveBookId(bookId);
+    setView('reader');
+  };
+
+  const closeTabsToRight = (bookId: string) => {
+    setOpenReaderBookIds((prev) => {
+      const index = prev.indexOf(bookId);
+      if (index === -1) return prev;
+      const kept = prev.slice(0, index + 1);
+      if (activeBookId && !kept.includes(activeBookId)) {
+        setActiveBookId(bookId);
+      }
+      return kept;
+    });
+  };
+
+  const moveTabRelative = (sourceId: string, targetId: string, side: 'left' | 'right') => {
+    if (sourceId === targetId) return;
+    setOpenReaderBookIds((prev) => {
+      const sourceIndex = prev.indexOf(sourceId);
+      const targetIndex = prev.indexOf(targetId);
+      if (sourceIndex === -1 || targetIndex === -1) return prev;
+      const next = [...prev];
+      next.splice(sourceIndex, 1);
+      let insertAt = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      if (side === 'right') insertAt += 1;
+      next.splice(insertAt, 0, sourceId);
+      return next;
+    });
+  };
 
   const handleUpload = async (file: File) => {
     setIsUploading(true);
@@ -249,6 +314,7 @@ export default function App() {
         localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
       }
       setActiveBookId(newBook.id);
+      setOpenReaderBookIds((prev) => (prev.includes(newBook.id) ? prev : [newBook.id, ...prev]));
       setIsUploadOpen(false);
       setView('reader');
     } catch (error: any) {
@@ -320,16 +386,39 @@ export default function App() {
     }
   };
 
-  const updateProgress = (page: number) => {
-    if (!activeBookId) return;
-    setProgress((prev) => ({ ...prev, [activeBookId]: page }));
-    if (window.electronAPI?.saveProgress) {
-      void window.electronAPI.saveProgress({ bookId: activeBookId, currentPage: page });
-    } else {
-      const nextProgress = { ...progress, [activeBookId]: page };
-      localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
+  const updateProgressForBook = useCallback((bookId: string, page: number, paragraphAnchor?: number) => {
+    const currentPage = progressRef.current[bookId] ?? 0;
+    const currentAnchor = progressAnchors[bookId];
+    const pageUnchanged = currentPage === page;
+    const anchorUnchanged = paragraphAnchor === undefined || currentAnchor === paragraphAnchor;
+    if (pageUnchanged && anchorUnchanged) return;
+
+    setProgress((prev) => (prev[bookId] === page ? prev : { ...prev, [bookId]: page }));
+    if (paragraphAnchor !== undefined) {
+      setProgressAnchors((prev) => (prev[bookId] === paragraphAnchor ? prev : { ...prev, [bookId]: paragraphAnchor }));
     }
-  };
+    if (window.electronAPI?.saveProgress) {
+      void window.electronAPI.saveProgress({ bookId, currentPage: page, paragraphAnchor });
+    } else {
+      const nextProgress = { ...progress, [bookId]: page };
+      const nextAnchors =
+        paragraphAnchor !== undefined ? { ...progressAnchors, [bookId]: paragraphAnchor } : progressAnchors;
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
+      localStorage.setItem(PROGRESS_ANCHOR_KEY, JSON.stringify(nextAnchors));
+    }
+  }, [progress, progressAnchors]);
+
+  const updateAnchorForBook = useCallback((bookId: string, paragraphAnchor: number) => {
+    setProgressAnchors((prev) => (prev[bookId] === paragraphAnchor ? prev : { ...prev, [bookId]: paragraphAnchor }));
+    const currentPage = progressRef.current[bookId] ?? 0;
+    if (window.electronAPI?.saveProgress) {
+      void window.electronAPI.saveProgress({ bookId, currentPage, paragraphAnchor });
+    } else {
+      const nextAnchors = { ...progressAnchors, [bookId]: paragraphAnchor };
+      localStorage.setItem(PROGRESS_ANCHOR_KEY, JSON.stringify(nextAnchors));
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(progressRef.current));
+    }
+  }, [progressAnchors]);
 
   const performDeleteBook = async (book: Book) => {
     setBooks((prev) => prev.filter((b) => b.id !== book.id));
@@ -343,10 +432,21 @@ export default function App() {
       delete next[book.id];
       return next;
     });
+    setProgressAnchors((prev) => {
+      const next = { ...prev };
+      delete next[book.id];
+      return next;
+    });
 
     if (activeBookId === book.id) {
-      setActiveBookId(null);
-      setView('bookshelf');
+      setOpenReaderBookIds((prev) => {
+        const next = prev.filter((id) => id !== book.id);
+        setActiveBookId(next[0] ?? null);
+        if (next.length === 0) setView('bookshelf');
+        return next;
+      });
+    } else {
+      setOpenReaderBookIds((prev) => prev.filter((id) => id !== book.id));
     }
 
     if (window.electronAPI?.deleteBook) {
@@ -355,13 +455,31 @@ export default function App() {
       const nextBooks = books.filter((b) => b.id !== book.id);
       const nextChats = { ...chats };
       const nextProgress = { ...progress };
+      const nextAnchors = { ...progressAnchors };
       delete nextChats[book.id];
       delete nextProgress[book.id];
+      delete nextAnchors[book.id];
       localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
       localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
+      localStorage.setItem(PROGRESS_ANCHOR_KEY, JSON.stringify(nextAnchors));
     }
   };
+
+  const activeBook = books.find((b) => b.id === activeBookId) || null;
+  const openReaderBooks = openReaderBookIds
+    .map((id) => books.find((b) => b.id === id))
+    .filter((b): b is Book => Boolean(b));
+  const hasOpenTabs = openReaderBooks.length > 0;
+  const displayBook = activeBook || openReaderBooks[0] || null;
+
+  useEffect(() => {
+    // Keep reader tabs stable during state races: if we still have open tabs,
+    // always recover a valid active tab.
+    if (hasOpenTabs && (!activeBookId || !openReaderBooks.some((b) => b.id === activeBookId))) {
+      setActiveBookId(openReaderBooks[0].id);
+    }
+  }, [hasOpenTabs, openReaderBooks, activeBookId]);
 
   if (isLoading) {
     return (
@@ -371,16 +489,14 @@ export default function App() {
     );
   }
 
-  const activeBook = books.find((b) => b.id === activeBookId) || null;
-
   return (
     <div className="h-screen w-full flex overflow-hidden bg-[#F4F1EA] text-[#1A1A1A]">
-      <Sidebar view={view} setView={setView} activeBook={!!activeBook} activeBookTitle={activeBook?.title} onUpload={() => setIsUploadOpen(true)} />
+      <Sidebar view={view} setView={setView} hasOpenReaderTabs={hasOpenTabs} onUpload={() => setIsUploadOpen(true)} />
 
-      <div className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="h-20 px-12 flex items-center justify-between border-b border-black/5 bg-[#FDFCF8] shrink-0">
+      <div className="flex-1 flex flex-col overflow-hidden relative min-h-0">
+        <header className="h-20 px-12 flex items-center justify-between border-b border-black/5 bg-[#FDFCF8] shrink-0 relative z-30">
           <div className="flex-1 max-w-xl">
-            {view === 'bookshelf' || !activeBook ? (
+            {view === 'bookshelf' || !displayBook ? (
               <div className="relative group">
                 <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
                   <span className="text-black/20 group-focus-within:text-black/50 transition-colors">
@@ -398,15 +514,15 @@ export default function App() {
             ) : null}
           </div>
           <div className="flex items-center gap-6 ml-8">
-            <div className="text-[10px] font-bold uppercase tracking-widest opacity-20 hidden lg:block">{activeBook ? `Current: ${activeBook.title}` : 'No book selected'}</div>
-            <button disabled={!activeBook} onClick={() => activeBook && setIsOverviewOpen(true)} className={cn('w-10 h-10 flex items-center justify-center rounded-xl hover:bg-black/5 transition-all', !activeBook && 'opacity-20 cursor-not-allowed')}>
+            <div className="text-[10px] font-bold uppercase tracking-widest opacity-20 hidden lg:block">{displayBook ? `Current: ${displayBook.title}` : 'No book selected'}</div>
+            <button disabled={!displayBook} onClick={() => displayBook && setIsOverviewOpen(true)} className={cn('w-10 h-10 flex items-center justify-center rounded-xl hover:bg-black/5 transition-all', !displayBook && 'opacity-20 cursor-not-allowed')}>
               <Sparkles className="w-5 h-5 opacity-40" />
             </button>
           </div>
         </header>
 
-        <main className={cn('flex-1 relative flex overflow-hidden bg-[#F4F1EA]', isResizing && 'pointer-events-none')}>
-          {view === 'bookshelf' || !activeBook ? (
+        <main className={cn('flex-1 relative flex overflow-hidden bg-[#F4F1EA] min-h-0', isResizing && 'pointer-events-none')}>
+          {view === 'bookshelf' ? (
             <Bookshelf
               books={searchedBooks}
               progress={progress}
@@ -414,16 +530,126 @@ export default function App() {
               onDeleteBook={(book) => setPendingDeleteBook(book)}
               onSelectBook={(book) => {
                 setActiveBookId(book.id);
+                setOpenReaderBookIds((prev) => (prev.includes(book.id) ? prev : [book.id, ...prev]));
                 setView('reader');
               }}
             />
           ) : (
-            <div className="flex-1 flex w-full">
-              <section style={{ width: `${readerWidth}%` }} className="h-full">
+            <div className="flex-1 flex flex-col w-full min-h-0">
+              <div
+                className="h-12 shrink-0 border-b border-black/5 bg-[#FDFCF8] flex items-center px-4 gap-2 overflow-x-auto relative z-20"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => {
+                  setDraggingBookId(null);
+                  setDragOverTab(null);
+                }}
+              >
+                {openReaderBooks.map((book) => {
+                  const isActive = book.id === activeBookId;
+                  return (
+                    <div
+                      key={book.id}
+                      className="relative"
+                    >
+                      {dragOverTab?.bookId === book.id && dragOverTab.side === 'left' && (
+                        <div className="absolute -left-1 top-1/2 -translate-y-1/2 h-5 w-0.5 bg-black/60 rounded-full z-20" />
+                      )}
+                      <div
+                      className={cn(
+                        'group min-w-0 max-w-[280px] h-8 rounded-t-lg border px-3 flex items-center gap-2 cursor-pointer transition-all',
+                        isActive
+                          ? 'bg-white border-black/15 border-b-white shadow-sm'
+                          : 'bg-[#f3f0e8] border-black/10 hover:bg-[#ece8dd]',
+                        draggingBookId === book.id && 'opacity-60',
+                      )}
+                      draggable
+                      onDragStart={() => setDraggingBookId(book.id)}
+                      onDragEnd={() => {
+                        setDraggingBookId(null);
+                        setDragOverTab(null);
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                        const side = e.clientX - rect.left < rect.width / 2 ? 'left' : 'right';
+                        setDragOverTab({ bookId: book.id, side });
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (draggingBookId && dragOverTab?.bookId === book.id) {
+                          moveTabRelative(draggingBookId, book.id, dragOverTab.side);
+                        }
+                        setDragOverTab(null);
+                        setDraggingBookId(null);
+                      }}
+                      onClick={() => setActiveBookId(book.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setTabMenu({ x: e.clientX, y: e.clientY, bookId: book.id });
+                      }}
+                    >
+                      <span className="text-[11px] font-semibold truncate">{book.title}</span>
+                      <button
+                        className="shrink-0 p-0.5 rounded hover:bg-black/10"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeReaderTab(book.id);
+                        }}
+                        title="关闭"
+                      >
+                        <X className="w-3.5 h-3.5 opacity-60 group-hover:opacity-90" />
+                      </button>
+                      </div>
+                      {dragOverTab?.bookId === book.id && dragOverTab.side === 'right' && (
+                        <div className="absolute -right-1 top-1/2 -translate-y-1/2 h-5 w-0.5 bg-black/60 rounded-full z-20" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <AnimatePresence>
+                {tabMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 6, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 6, scale: 0.98 }}
+                    className="fixed z-[260] w-44 rounded-xl bg-[#FDFCF8] border border-black/10 shadow-2xl overflow-hidden"
+                    style={{ left: tabMenu.x, top: tabMenu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      className="w-full text-left px-4 py-3 text-xs font-semibold hover:bg-black/[0.04]"
+                      onClick={() => {
+                        closeOtherTabs(tabMenu.bookId);
+                        setTabMenu(null);
+                      }}
+                    >
+                      关闭其他标签
+                    </button>
+                    <button
+                      className="w-full text-left px-4 py-3 text-xs font-semibold hover:bg-black/[0.04]"
+                      onClick={() => {
+                        closeTabsToRight(tabMenu.bookId);
+                        setTabMenu(null);
+                      }}
+                    >
+                      关闭右侧标签
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {!displayBook ? (
+                <div className="flex-1 flex items-center justify-center text-sm text-black/40">暂无打开的阅读页</div>
+              ) : (
+              <div className="flex-1 flex w-full min-h-0 overflow-hidden">
+              <section style={{ width: `${readerWidth}%` }} className="h-full min-h-0 overflow-hidden">
                 <ReaderPanel
-                  book={activeBook}
-                  currentPage={progress[activeBook.id] || 0}
-                  onPageChange={updateProgress}
+                  book={displayBook}
+                  currentPage={progress[displayBook.id] || 0}
+                  paragraphAnchor={progressAnchors[displayBook.id]}
+                  onPageChange={(page) => updateProgressForBook(displayBook.id, page)}
+                  onAnchorChange={(anchor) => updateAnchorForBook(displayBook.id, anchor)}
                   onAnnotate={(text) => setPendingQuote(text)}
                   isOverviewOpen={isOverviewOpen}
                   onCloseOverview={() => setIsOverviewOpen(false)}
@@ -434,27 +660,29 @@ export default function App() {
                 <div className="w-px h-8 bg-gray-300 group-hover:bg-indigo-400" />
               </div>
 
-              <section style={{ width: `${100 - readerWidth}%` }} className="h-full bg-white border-l border-black/5">
+              <section style={{ width: `${100 - readerWidth}%` }} className="h-full min-h-0 bg-white border-l border-black/5 overflow-hidden">
                 <ChatPanel
-                  book={activeBook}
-                  messages={chats[activeBookId!] || []}
+                  book={displayBook}
+                  messages={chats[displayBook.id] || []}
                   onSendMessage={handleSendMessage}
                   onSummarize={handleSummarize}
                   isLoading={isAiLoading}
                   pendingQuote={pendingQuote}
                   onClearQuote={() => setPendingQuote(null)}
                   onClear={async () => {
-                    if (!activeBookId) return;
-                    setChats((prev) => ({ ...prev, [activeBookId]: [] }));
+                    const bookId = displayBook.id;
+                    setChats((prev) => ({ ...prev, [bookId]: [] }));
                     if (window.electronAPI?.saveChat) {
-                      await window.electronAPI.saveChat({ bookId: activeBookId, messages: [] });
+                      await window.electronAPI.saveChat({ bookId, messages: [] });
                     } else {
-                      const nextChats = { ...chats, [activeBookId]: [] };
+                      const nextChats = { ...chats, [bookId]: [] };
                       localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
                     }
                   }}
                 />
               </section>
+            </div>
+              )}
             </div>
           )}
         </main>
@@ -557,6 +785,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 

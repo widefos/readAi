@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Book, TocItem } from '../types';
 import { createReaderEngine } from '../engines/readerEngine';
 import { motion, AnimatePresence } from 'motion/react';
@@ -6,16 +6,29 @@ import { cn } from '../lib/utils';
 import { ChevronRight, Settings, List, Sparkles, X as CloseIcon, Clock, FileText, Calendar, Hash } from 'lucide-react';
 import { usePdfReaderEngine } from '../engines/pdfReaderEngine';
 
+const textPaginationCache = new Map<string, number[]>();
+
 interface ReaderPanelProps {
   book: Book;
   currentPage: number;
   onPageChange: (page: number) => void;
+  paragraphAnchor?: number;
+  onAnchorChange?: (anchor: number) => void;
   onAnnotate?: (text: string) => void;
   isOverviewOpen: boolean;
   onCloseOverview: () => void;
 }
 
-export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOverviewOpen, onCloseOverview }: ReaderPanelProps) {
+export function ReaderPanel({
+  book,
+  currentPage,
+  onPageChange,
+  paragraphAnchor,
+  onAnchorChange,
+  onAnnotate,
+  isOverviewOpen,
+  onCloseOverview,
+}: ReaderPanelProps) {
   const [fontSize, setFontSize] = useState(20);
   const [lineHeight, setLineHeight] = useState(1.8);
   const [fontFamily, setFontFamily] = useState<'sans' | 'serif' | 'mono'>('serif');
@@ -27,17 +40,32 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
   const [isTocOpen, setIsTocOpen] = useState(false);
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const textViewportRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
   const { pdfTotalPages, pdfError, openWithSystemViewer } = usePdfReaderEngine(book, currentPage, pdfScale, pdfCanvasRef);
 
   const isPdfBook = book.fileType === 'application/pdf';
-  const itemsPerPage = 8;
   const engine = createReaderEngine(book, pdfTotalPages);
-  const totalPages = engine.totalPages;
+  const allParagraphs = useMemo(() => book.content.split('\n').filter((p) => p.trim().length > 0), [book.content]);
+  const [textPageStarts, setTextPageStarts] = useState<number[]>([0]);
+  const textPageStartsRef = useRef<number[]>([0]);
+  const prevPageStartsRef = useRef<number[]>([0]);
+  const lastEmittedAnchorRef = useRef<number | null>(null);
+  const reflowAnchorRef = useRef<number | null>(null);
+  const lastAppliedExternalAnchorRef = useRef<number | null>(null);
+  const textPaginationReadyRef = useRef<boolean>(isPdfBook);
+  const totalPages = isPdfBook ? engine.totalPages : Math.max(1, textPageStarts.length);
   const wordCount = book.content.split(/\s+/).length;
   const readingTime = Math.ceil(wordCount / 200);
   const fileSize = (new Blob([book.content]).size / 1024).toFixed(1);
-  const currentParagraphs = engine.getParagraphPage(currentPage);
+  const currentParagraphs = isPdfBook
+    ? engine.getParagraphPage(currentPage)
+    : (() => {
+        const start = textPageStarts[currentPage];
+        if (!textPaginationReadyRef.current || start === undefined) return [];
+        const end = textPageStarts[currentPage + 1] ?? allParagraphs.length;
+        return allParagraphs.slice(start, end);
+      })();
   const calcPercent = (page: number, pages: number) => {
     if (pages <= 1) return 100;
     const ratio = page / (pages - 1);
@@ -56,6 +84,35 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
     mono: 'font-mono',
   };
 
+  const fontFamilies: Record<'sans' | 'serif' | 'mono', string> = {
+    sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    serif: '"Noto Serif SC", "Songti SC", "STSong", "SimSun", serif',
+    mono: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+  };
+
+  const findPageByParagraphIndex = (index: number, starts: number[]) => {
+    if (!starts.length) return 0;
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      if (starts[mid] <= index) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+
+  const safePageChange = (nextPage: number) => {
+    if (nextPage === currentPage) return;
+    onPageChange(nextPage);
+  };
+
+  const lockReflowAnchorToCurrentPage = () => {
+    if (isPdfBook) return;
+    const starts = textPageStartsRef.current;
+    reflowAnchorRef.current = starts[Math.min(currentPage, starts.length - 1)] ?? 0;
+  };
+
   useEffect(() => {
     const handleGlobalClick = (e: MouseEvent) => {
       if (selection && !(e.target as HTMLElement).closest('.ai-context-menu')) {
@@ -72,8 +129,153 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
   }, [currentPage]);
 
   useEffect(() => {
-    if (totalPages > 0 && currentPage > totalPages - 1) onPageChange(totalPages - 1);
-  }, [currentPage, totalPages, onPageChange]);
+    textPaginationReadyRef.current = isPdfBook;
+  }, [book.id, isPdfBook]);
+
+  useEffect(() => {
+    textPageStartsRef.current = textPageStarts;
+    if (!isPdfBook && textPageStarts.length > 0) {
+      textPaginationReadyRef.current = true;
+    }
+  }, [textPageStarts, isPdfBook]);
+
+  useEffect(() => {
+    if (isPdfBook) return;
+    const cacheKey = `${book.id}|${fontSize}|${lineHeight}|${fontFamily}`;
+    const cached = textPaginationCache.get(cacheKey);
+    if (cached && cached.length > 0) {
+      setTextPageStarts(cached);
+      textPageStartsRef.current = cached;
+    }
+  }, [book.id, fontSize, lineHeight, fontFamily, isPdfBook]);
+
+  useEffect(() => {
+    if (!isPdfBook && !textPaginationReadyRef.current) return;
+    if (!isPdfBook && textPageStarts.length <= 1 && allParagraphs.length > 1) return;
+    if (totalPages > 0 && currentPage > totalPages - 1) safePageChange(totalPages - 1);
+  }, [currentPage, totalPages, onPageChange, isPdfBook, textPageStarts.length, allParagraphs.length]);
+
+  useEffect(() => {
+    if (isPdfBook) return;
+
+    let rafId: number | null = null;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+
+    const recalc = () => {
+      const viewport = textViewportRef.current;
+      if (!viewport) return;
+      const maxHeight = viewport.clientHeight;
+      const width = viewport.clientWidth;
+      if (maxHeight <= 0 || width <= 0 || allParagraphs.length === 0) {
+        setTextPageStarts([0]);
+        return;
+      }
+
+      const measurer = document.createElement('div');
+      measurer.style.position = 'absolute';
+      measurer.style.visibility = 'hidden';
+      measurer.style.pointerEvents = 'none';
+      measurer.style.zIndex = '-1';
+      measurer.style.left = '-99999px';
+      measurer.style.top = '0';
+      measurer.style.width = `${width}px`;
+      measurer.style.fontSize = `${fontSize}px`;
+      measurer.style.lineHeight = String(lineHeight);
+      measurer.style.fontFamily = fontFamilies[fontFamily];
+      measurer.style.letterSpacing = '0.02em';
+      measurer.style.wordBreak = 'break-word';
+      measurer.style.textAlign = 'justify';
+      document.body.appendChild(measurer);
+
+      const paragraphMeasurer = document.createElement('p');
+      paragraphMeasurer.style.margin = '0';
+      paragraphMeasurer.style.padding = '0';
+      paragraphMeasurer.style.textIndent = '2em';
+      measurer.appendChild(paragraphMeasurer);
+
+      const gapPx = 24;
+      const starts: number[] = [0];
+      let usedHeight = 0;
+
+      for (let i = 0; i < allParagraphs.length; i++) {
+        paragraphMeasurer.textContent = allParagraphs[i];
+        const paragraphHeight = paragraphMeasurer.getBoundingClientRect().height;
+
+        const nextHeight = usedHeight + (usedHeight > 0 ? gapPx : 0) + paragraphHeight;
+        if (usedHeight > 0 && nextHeight > maxHeight) {
+          starts.push(i);
+          usedHeight = paragraphHeight;
+        } else {
+          usedHeight = nextHeight;
+        }
+      }
+
+      document.body.removeChild(measurer);
+      const cacheKey = `${book.id}|${fontSize}|${lineHeight}|${fontFamily}`;
+      textPaginationCache.set(cacheKey, starts);
+      setTextPageStarts(starts);
+    };
+
+    const scheduleRecalc = (delayMs = 80) => {
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(() => {
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          recalc();
+          rafId = null;
+        });
+      }, delayMs);
+    };
+
+    const onWindowResize = () => scheduleRecalc(120);
+
+    scheduleRecalc(0);
+    const ro = new ResizeObserver(() => scheduleRecalc(100));
+    if (textViewportRef.current) ro.observe(textViewportRef.current);
+    window.addEventListener('resize', onWindowResize);
+    return () => {
+      if (timerId) clearTimeout(timerId);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      ro.disconnect();
+      window.removeEventListener('resize', onWindowResize);
+    };
+  }, [isPdfBook, allParagraphs, fontSize, lineHeight, fontFamily, book.id]);
+
+  useEffect(() => {
+    if (isPdfBook) return;
+    if (!textPaginationReadyRef.current) return;
+    if (reflowAnchorRef.current === null) return;
+    const prevStarts = prevPageStartsRef.current;
+    const prevAnchor =
+      reflowAnchorRef.current ?? (prevStarts[Math.min(currentPage, prevStarts.length - 1)] ?? 0);
+    const nextPage = findPageByParagraphIndex(prevAnchor, textPageStarts);
+    prevPageStartsRef.current = textPageStarts;
+    if (nextPage !== currentPage) {
+      safePageChange(nextPage);
+      return;
+    }
+    reflowAnchorRef.current = null;
+  }, [textPageStarts, isPdfBook, currentPage, onPageChange]);
+
+  useEffect(() => {
+    if (isPdfBook || paragraphAnchor === undefined) return;
+    if (!textPaginationReadyRef.current) return;
+    if (reflowAnchorRef.current !== null) return;
+    if (currentPage !== 0) return;
+    if (lastAppliedExternalAnchorRef.current === paragraphAnchor) return;
+    lastAppliedExternalAnchorRef.current = paragraphAnchor;
+    const targetPage = findPageByParagraphIndex(paragraphAnchor, textPageStartsRef.current);
+    if (targetPage !== currentPage) safePageChange(targetPage);
+  }, [paragraphAnchor, isPdfBook, currentPage, onPageChange]);
+
+  useEffect(() => {
+    if (isPdfBook || !onAnchorChange) return;
+    if (reflowAnchorRef.current !== null) return;
+    const anchor = textPageStarts[Math.min(currentPage, textPageStarts.length - 1)] ?? 0;
+    if (lastEmittedAnchorRef.current === anchor) return;
+    lastEmittedAnchorRef.current = anchor;
+    onAnchorChange(anchor);
+  }, [currentPage, textPageStarts, isPdfBook, onAnchorChange]);
 
 
   const handleMouseUp = () => {
@@ -107,6 +309,7 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
       });
       return;
     }
+    lockReflowAnchorToCurrentPage();
     setFontSize((prev) => {
       const next = zoomIn ? prev + 1 : prev - 1;
       return Math.max(14, Math.min(40, next));
@@ -129,7 +332,8 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
       <button
         onClick={() => {
           if (item.position !== undefined) {
-            onPageChange(Math.min(Math.floor(item.position / itemsPerPage), totalPages - 1));
+            const targetPage = findPageByParagraphIndex(item.position, textPageStarts);
+            safePageChange(Math.min(targetPage, totalPages - 1));
             setIsTocOpen(false);
           }
         }}
@@ -143,8 +347,8 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
   );
 
   return (
-    <div className={cn('flex-1 flex flex-col h-full border-r editorial-border transition-colors duration-500 relative', themeClasses[theme])}>
-      <header className="px-12 py-8 flex items-start gap-6">
+    <div className={cn('flex-1 flex flex-col h-full min-h-0 overflow-hidden border-r editorial-border transition-colors duration-500 relative', themeClasses[theme])}>
+      <header className="px-12 py-8 flex items-start gap-6 shrink-0">
         <button onClick={() => setIsTocOpen(!isTocOpen)} className="p-2 hover:bg-black/5 rounded-full transition-all opacity-40 hover:opacity-100 mt-1" title="目录">
           <List className="w-5 h-5" />
         </button>
@@ -197,8 +401,13 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
         )}
       </AnimatePresence>
 
-      <main ref={contentRef} onMouseUp={handleMouseUp} onWheel={handleCtrlWheel} className="flex-1 overflow-y-auto px-12 pb-12 relative">
-        <div className="max-w-3xl mx-auto">
+      <main
+        ref={contentRef}
+        onMouseUp={handleMouseUp}
+        onWheel={handleCtrlWheel}
+        className="flex-1 min-h-0 px-12 pb-12 relative overflow-y-auto"
+      >
+        <div ref={textViewportRef} className={cn('max-w-3xl mx-auto', !isPdfBook && 'h-full')}>
           {isPdfBook ? (
             <div className="flex justify-center py-6">
               {pdfError ? (
@@ -237,11 +446,11 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
         </AnimatePresence>
       </main>
 
-      <footer className="mt-auto px-12 py-8 border-t editorial-border flex justify-between items-center text-[10px] font-bold uppercase tracking-[0.2em]">
+      <footer className="mt-auto px-12 py-8 border-t editorial-border flex justify-between items-center text-[10px] font-bold uppercase tracking-[0.2em] shrink-0">
         <div className="flex items-center gap-8">
-          <button disabled={currentPage === 0} onClick={() => onPageChange(currentPage - 1)} className="hover:opacity-100 opacity-40 transition-opacity disabled:opacity-10">上一页</button>
+          <button disabled={currentPage === 0} onClick={() => safePageChange(currentPage - 1)} className="hover:opacity-100 opacity-40 transition-opacity disabled:opacity-10">上一页</button>
           <div className="flex items-center gap-3 opacity-40"><span>{currentPage + 1}</span><span className="opacity-20 italic">/</span><span>{totalPages}</span></div>
-          <button disabled={currentPage >= totalPages - 1} onClick={() => onPageChange(currentPage + 1)} className="hover:opacity-100 opacity-40 transition-opacity disabled:opacity-10">下一页</button>
+          <button disabled={currentPage >= totalPages - 1} onClick={() => safePageChange(currentPage + 1)} className="hover:opacity-100 opacity-40 transition-opacity disabled:opacity-10">下一页</button>
         </div>
         <div className="flex items-center gap-4 relative">
           <span className="opacity-40">已读 {calcPercent(currentPage, totalPages)}%</span>
@@ -254,9 +463,9 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute bottom-full right-0 mb-4 p-6 bg-white border editorial-border shadow-2xl z-50 w-64 text-[#1A1A1A]">
                     <h3 className="text-[10px] font-bold uppercase tracking-widest mb-6">阅读偏好</h3>
                     <div className="space-y-6">
-                      <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">字体大小 ({fontSize}px)</label><input type="range" min="14" max="32" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="w-full h-1 bg-gray-100 appearance-none pointer cursor-pointer accent-black" /></div>
-                      <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">行高 ({lineHeight})</label><input type="range" min="1" max="3" step="0.1" value={lineHeight} onChange={(e) => setLineHeight(Number(e.target.value))} className="w-full h-1 bg-gray-100 appearance-none pointer cursor-pointer accent-black" /></div>
-                      <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">字体</label><div className="flex gap-1">{(['serif', 'sans', 'mono'] as const).map((f) => <button key={f} onClick={() => setFontFamily(f)} className={cn('flex-1 py-2 text-[9px] font-bold uppercase border', fontFamily === f ? 'bg-black text-white' : 'border-gray-200')}>{f === 'serif' ? '宋体' : f === 'sans' ? '黑体' : '等宽'}</button>)}</div></div>
+                      <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">字体大小 ({fontSize}px)</label><input type="range" min="14" max="32" value={fontSize} onChange={(e) => { lockReflowAnchorToCurrentPage(); setFontSize(Number(e.target.value)); }} className="w-full h-1 bg-gray-100 appearance-none pointer cursor-pointer accent-black" /></div>
+                      <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">行高 ({lineHeight})</label><input type="range" min="1" max="3" step="0.1" value={lineHeight} onChange={(e) => { lockReflowAnchorToCurrentPage(); setLineHeight(Number(e.target.value)); }} className="w-full h-1 bg-gray-100 appearance-none pointer cursor-pointer accent-black" /></div>
+                      <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">字体</label><div className="flex gap-1">{(['serif', 'sans', 'mono'] as const).map((f) => <button key={f} onClick={() => { lockReflowAnchorToCurrentPage(); setFontFamily(f); }} className={cn('flex-1 py-2 text-[9px] font-bold uppercase border', fontFamily === f ? 'bg-black text-white' : 'border-gray-200')}>{f === 'serif' ? '宋体' : f === 'sans' ? '黑体' : '等宽'}</button>)}</div></div>
                       <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">阅读主题</label><div className="flex gap-1">{(['light', 'paper', 'dark'] as const).map((t) => <button key={t} onClick={() => setTheme(t)} className={cn('flex-1 py-2 text-[9px] font-bold uppercase border', theme === t ? 'bg-black text-white' : 'border-gray-200')}>{t === 'light' ? '明亮' : t === 'paper' ? '纸张' : '深色'}</button>)}</div></div>
                       <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">翻页动画</label><div className="grid grid-cols-2 gap-1">{(['fade', 'slide', 'slide-up', 'none'] as const).map((a) => <button key={a} onClick={() => setAnimationType(a)} className={cn('py-2 text-[9px] font-bold uppercase border', animationType === a ? 'bg-black text-white' : 'border-gray-200')}>{a === 'fade' ? '渐变' : a === 'slide' ? '平移' : a === 'slide-up' ? '上滑' : '无'}</button>)}</div></div>
                       <div><label className="text-[9px] font-bold uppercase tracking-widest mb-3 block opacity-50">动画速度 ({animationSpeed}s)</label><input type="range" min="0" max="2" step="0.1" value={animationSpeed} onChange={(e) => setAnimationSpeed(Number(e.target.value))} className="w-full h-1 bg-gray-100 appearance-none pointer cursor-pointer accent-black" /></div>
@@ -271,4 +480,11 @@ export function ReaderPanel({ book, currentPage, onPageChange, onAnnotate, isOve
     </div>
   );
 }
+
+
+
+
+
+
+
 

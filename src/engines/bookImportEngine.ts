@@ -13,6 +13,29 @@ export interface ImportedBookData {
   fingerprint: string;
 }
 
+function normalizeEpubHref(href?: string): string {
+  if (!href) return '';
+  const noHash = href.split('#')[0]?.split('?')[0] ?? '';
+  const normalized = noHash.replace(/\\/g, '/').replace(/^\.?\//, '').trim().toLowerCase();
+  try {
+    return decodeURIComponent(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
+function resolveHrefPosition(href: string | undefined, hrefToPosition: Map<string, number>): number | undefined {
+  const key = normalizeEpubHref(href);
+  if (!key) return undefined;
+  const exact = hrefToPosition.get(key);
+  if (exact !== undefined) return exact;
+
+  for (const [k, pos] of hrefToPosition.entries()) {
+    if (k.endsWith(`/${key}`) || key.endsWith(`/${k}`)) return pos;
+  }
+  return undefined;
+}
+
 export async function resolvePdfPageCount(pdfPath?: string): Promise<number | undefined> {
   if (!pdfPath || !window.electronAPI?.getPdfUrl) return undefined;
   try {
@@ -121,6 +144,8 @@ async function importEpub(file: File): Promise<Omit<ImportedBookData, 'fingerpri
   }
 
   let text = '';
+  let paragraphOffset = 0;
+  const hrefToPosition = new Map<string, number>();
   const spineItems = (book.spine as any).items || [];
   for (const item of spineItems) {
     try {
@@ -129,7 +154,18 @@ async function importEpub(file: File): Promise<Omit<ImportedBookData, 'fingerpri
       const parser = new DOMParser();
       const doc = (typeof resource === 'string' ? parser.parseFromString(resource, 'text/html') : resource) as Document;
       const content = doc.body?.innerText || doc.body?.textContent || '';
-      if (content.trim()) text += `${content.trim()}\n\n`;
+      const normalizedHref = normalizeEpubHref(item.href);
+      if (normalizedHref && !hrefToPosition.has(normalizedHref)) {
+        hrefToPosition.set(normalizedHref, paragraphOffset);
+      }
+      if (content.trim()) {
+        const paragraphs = content
+          .split('\n')
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0);
+        text += `${paragraphs.join('\n')}\n\n`;
+        paragraphOffset += paragraphs.length;
+      }
     } catch {
       // ignore chapter parse failure
     }
@@ -142,6 +178,7 @@ async function importEpub(file: File): Promise<Omit<ImportedBookData, 'fingerpri
       items.map((item) => ({
         label: item.label,
         href: item.href,
+        position: resolveHrefPosition(item.href, hrefToPosition),
         children: item.subitems?.length ? mapToc(item.subitems) : undefined,
       }));
     if (navigation?.toc) toc = mapToc(navigation.toc);

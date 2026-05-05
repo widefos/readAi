@@ -66,8 +66,14 @@ async function initDb() {
   await run(`CREATE TABLE IF NOT EXISTS progress (
     bookId TEXT PRIMARY KEY,
     currentPage INTEGER NOT NULL,
+    paragraphAnchor INTEGER,
     lastReadAt TEXT NOT NULL
   )`);
+  try {
+    await run('ALTER TABLE progress ADD COLUMN paragraphAnchor INTEGER');
+  } catch {
+    // ignore when column already exists
+  }
 }
 
 async function ensureBooksDir() {
@@ -198,10 +204,12 @@ app.whenReady().then(async () => {
       chats[row.bookId] = JSON.parse(row.messages);
     }
     const progress = {};
+    const progressAnchors = {};
     for (const row of progressRows) {
       progress[row.bookId] = row.currentPage;
+      if (typeof row.paragraphAnchor === 'number') progressAnchors[row.bookId] = row.paragraphAnchor;
     }
-    return { books, chats, progress };
+    return { books, chats, progress, progressAnchors };
   });
 
   ipcMain.handle('library:save-book', async (_event, book) => {
@@ -267,11 +275,12 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('library:save-progress', async (_event, payload) => {
     await run(
-      `INSERT INTO progress (bookId,currentPage,lastReadAt) VALUES (?,?,?)
+      `INSERT INTO progress (bookId,currentPage,paragraphAnchor,lastReadAt) VALUES (?,?,?,?)
        ON CONFLICT(bookId) DO UPDATE SET
          currentPage=excluded.currentPage,
+         paragraphAnchor=excluded.paragraphAnchor,
          lastReadAt=excluded.lastReadAt`,
-      [payload.bookId, payload.currentPage || 0, new Date().toISOString()],
+      [payload.bookId, payload.currentPage || 0, payload.paragraphAnchor ?? null, new Date().toISOString()],
     );
     return { ok: true };
   });
