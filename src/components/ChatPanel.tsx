@@ -19,7 +19,7 @@ interface ChatPanelProps {
   onClear: () => void;
   pendingQuote?: string | null;
   onClearQuote?: () => void;
-  theme: 'paper' | 'light' | 'dark';
+  theme: 'paper' | 'light' | 'dark' | 'eye';
 }
 
 export function ChatPanel({ messages, onSendMessage, onStopGenerate, onSummarize, isLoading, aiStatus, aiStatusMessage, onRetryHealth, onClear, pendingQuote, onClearQuote, theme }: ChatPanelProps) {
@@ -31,56 +31,66 @@ export function ChatPanel({ messages, onSendMessage, onStopGenerate, onSummarize
     light: 'bg-[#F3F4F6] text-[#1A1A1A]',
     paper: 'bg-[#F4F1EA] text-[#1A1A1A]',
     dark: 'bg-[#131313] text-[#D5D5D5]',
+    eye: 'bg-[#042f38] text-[#ccefe8]',
   } as const;
-  const accentClasses = { light: 'text-blue-600', paper: 'text-indigo-600', dark: 'text-sky-300' } as const;
+  const accentClasses = { light: 'text-blue-600', paper: 'text-indigo-600', dark: 'text-sky-300', eye: 'text-[#24c6ad]' } as const;
   const toolBtnClasses = {
     light: 'border border-black/15 hover:bg-black/[0.04]',
     paper: 'border editorial-border hover:bg-white',
     dark: 'border border-white/15 hover:bg-white/8',
+    eye: 'border border-[#1cb29b]/35 hover:bg-[#0a4b53]',
   } as const;
   const emptyCardClasses = {
     light: 'bg-white border border-black/10',
     paper: 'bg-white border editorial-border ai-glow',
     dark: 'bg-[#1B1B1B] border border-white/10',
+    eye: 'bg-[#0a424b] border border-[#1fb39b]/28',
   } as const;
   const userMsgClasses = {
     light: 'bg-[#F7F8FA] border border-black/10',
     paper: 'bg-[#FDFCF8] border editorial-border',
     dark: 'bg-[#202020] border border-white/10',
+    eye: 'bg-[#0c4851] border border-[#1fb39b]/30',
   } as const;
   const modelMsgClasses = {
     light: 'bg-white border border-black/12',
     paper: 'bg-white border editorial-border ai-glow',
     dark: 'bg-[#171717] border border-white/12',
+    eye: 'bg-[#0a424b] border border-[#1fb39b]/28',
   } as const;
-  const modelTextClasses = { light: 'text-gray-700', paper: 'text-gray-700', dark: 'text-[#C8C8C8]' } as const;
-  const quoteBlockClasses = { light: 'border-black/25 text-black/55', paper: 'border-gray-300 text-gray-500', dark: 'border-white/20 text-white/60' } as const;
+  const modelTextClasses = { light: 'text-gray-700', paper: 'text-gray-700', dark: 'text-[#C8C8C8]', eye: 'text-[#bde8de]' } as const;
+  const quoteBlockClasses = { light: 'border-black/25 text-black/55', paper: 'border-gray-300 text-gray-500', dark: 'border-white/20 text-white/60', eye: 'border-[#25c8ad]/35 text-[#8ccfc2]' } as const;
   const loadingCardClasses = {
     light: 'bg-white border border-black/10',
     paper: 'bg-white border editorial-border',
     dark: 'bg-[#1B1B1B] border border-white/10',
+    eye: 'bg-[#0a424b] border border-[#1fb39b]/28',
   } as const;
   const composerClasses = {
     light: 'border border-black/15 bg-white shadow-sm',
     paper: 'border editorial-border bg-white shadow-sm',
     dark: 'border border-white/15 bg-[#1A1A1A]',
+    eye: 'border border-[#1fb39b]/35 bg-[#093f48] shadow-sm',
   } as const;
   const quotePanelClasses = {
     light: 'bg-black/[0.02] border-b border-black/10',
     paper: 'bg-[#F9F8F6] border-b editorial-border',
     dark: 'bg-white/5 border-b border-white/10',
+    eye: 'bg-[#0b4b54]/55 border-b border-[#20b39b]/22',
   } as const;
-  const quoteTextClasses = { light: 'text-black/60', paper: 'text-gray-500', dark: 'text-white/70' } as const;
-  const quoteDismissClasses = { light: 'hover:bg-black/8', paper: 'hover:bg-gray-200', dark: 'hover:bg-white/10' } as const;
+  const quoteTextClasses = { light: 'text-black/60', paper: 'text-gray-500', dark: 'text-white/70', eye: 'text-[#8ccfc2]' } as const;
+  const quoteDismissClasses = { light: 'hover:bg-black/8', paper: 'hover:bg-gray-200', dark: 'hover:bg-white/10', eye: 'hover:bg-[#0e5962]' } as const;
   const inputClasses = {
     light: 'bg-white text-[#1A1A1A] placeholder:text-black/30',
     paper: 'bg-white text-[#1A1A1A] placeholder:opacity-30',
     dark: 'bg-[#1A1A1A] text-[#E0E0E0] placeholder:text-white/30',
+    eye: 'bg-[#083f48] text-[#d7f5ee] placeholder:text-[#8ecfc3]/65',
   } as const;
   const sendBtnClasses = {
     light: 'bg-[#1A1A1A] text-white hover:bg-black',
     paper: 'bg-black text-white',
     dark: 'bg-[#E2E2E2] text-[#161616] hover:bg-white',
+    eye: 'bg-[#1db69e] text-[#05323b] hover:bg-[#29ccb2]',
   } as const;
 
   useEffect(() => {

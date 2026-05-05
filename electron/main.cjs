@@ -47,7 +47,8 @@ async function initDb() {
     sourceFileName TEXT,
     sourceFileSizeBytes INTEGER,
     pageCount INTEGER,
-    fingerprint TEXT
+    fingerprint TEXT,
+    bookmarks TEXT
   )`);
   try {
     await run('ALTER TABLE books ADD COLUMN pageCount INTEGER');
@@ -61,6 +62,11 @@ async function initDb() {
   }
   try {
     await run('ALTER TABLE books ADD COLUMN sourceFileSizeBytes INTEGER');
+  } catch {
+    // ignore when column already exists
+  }
+  try {
+    await run('ALTER TABLE books ADD COLUMN bookmarks TEXT');
   } catch {
     // ignore when column already exists
   }
@@ -210,6 +216,7 @@ app.whenReady().then(async () => {
     const books = booksRows.map((row) => ({
       ...row,
       toc: row.toc ? JSON.parse(row.toc) : [],
+      bookmarks: row.bookmarks ? JSON.parse(row.bookmarks) : [],
     }));
     const chats = {};
     for (const row of chatsRows) {
@@ -228,8 +235,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('library:save-book', async (_event, book) => {
     await run(
-      `INSERT INTO books (id,title,author,content,createdAt,fileType,toc,cover,pdfPath,sourceFileName,sourceFileSizeBytes,pageCount,fingerprint)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO books (id,title,author,content,createdAt,fileType,toc,cover,pdfPath,sourceFileName,sourceFileSizeBytes,pageCount,fingerprint,bookmarks)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET
          title=excluded.title,
          author=excluded.author,
@@ -242,7 +249,8 @@ app.whenReady().then(async () => {
          sourceFileName=excluded.sourceFileName,
          sourceFileSizeBytes=excluded.sourceFileSizeBytes,
          pageCount=excluded.pageCount,
-         fingerprint=excluded.fingerprint`,
+         fingerprint=excluded.fingerprint,
+         bookmarks=excluded.bookmarks`,
       [
         book.id,
         book.title,
@@ -257,6 +265,7 @@ app.whenReady().then(async () => {
         book.sourceFileSizeBytes || null,
         book.pageCount || null,
         book.fingerprint || null,
+        JSON.stringify(book.bookmarks || []),
       ],
     );
     return { ok: true };

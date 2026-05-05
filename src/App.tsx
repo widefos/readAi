@@ -41,7 +41,7 @@ export default function App() {
   const [readerWidth, setReaderWidth] = useState(60);
   const [isResizing, setIsResizing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [theme, setTheme] = useState<'paper' | 'light' | 'dark'>('paper');
+  const [theme, setTheme] = useState<'paper' | 'light' | 'dark' | 'eye'>('paper');
   const [aiStatus, setAiStatus] = useState<'checking' | 'ready' | 'error'>('checking');
   const [aiStatusMessage, setAiStatusMessage] = useState<string>('');
   const hydratingBookIdsRef = useRef<Set<string>>(new Set());
@@ -136,7 +136,7 @@ export default function App() {
           const savedProgress = JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') as Record<string, number>;
           const savedAnchors = JSON.parse(localStorage.getItem(PROGRESS_ANCHOR_KEY) || '{}') as Record<string, number>;
           const savedReadingDurations = JSON.parse(localStorage.getItem(READING_DURATION_KEY) || '{}') as Record<string, number>;
-          const savedTheme = (localStorage.getItem(THEME_KEY) as 'paper' | 'light' | 'dark' | null) || 'paper';
+          const savedTheme = (localStorage.getItem(THEME_KEY) as 'paper' | 'light' | 'dark' | 'eye' | null) || 'paper';
           setChats(savedChats);
           setProgress(savedProgress);
           setProgressAnchors(savedAnchors);
@@ -349,6 +349,7 @@ export default function App() {
         sourceFileSizeBytes: file.size,
         pageCount: imported.pageCount,
         fingerprint: imported.fingerprint,
+        bookmarks: [],
       };
 
       setBooks((prev) => [newBook, ...prev]);
@@ -519,6 +520,25 @@ export default function App() {
     }
   }, [progressAnchors]);
 
+  const updateBookmarksForBook = useCallback(async (bookId: string, bookmarks: NonNullable<Book['bookmarks']>) => {
+    let nextBook: Book | null = null;
+    setBooks((prev) =>
+      prev.map((b) => {
+        if (b.id !== bookId) return b;
+        nextBook = { ...b, bookmarks };
+        return nextBook;
+      }),
+    );
+    if (!nextBook) return;
+
+    if (window.electronAPI?.saveBook) {
+      await window.electronAPI.saveBook(nextBook);
+    } else {
+      const nextBooks = books.map((b) => (b.id === bookId ? { ...b, bookmarks } : b));
+      localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
+    }
+  }, [books]);
+
   const addReadingSecondsForBook = useCallback((bookId: string, deltaSeconds: number) => {
     if (deltaSeconds <= 0) return;
     setReadingDurations((prev) => {
@@ -654,47 +674,56 @@ export default function App() {
     light: 'bg-[#F7F7F7] text-[#1A1A1A]',
     paper: 'bg-[#F4F1EA] text-[#1A1A1A]',
     dark: 'bg-[#111111] text-[#D1D1D1]',
+    eye: 'bg-[radial-gradient(1200px_700px_at_35%_20%,#0b6e67_0%,#054a49_45%,#032f38_100%)] text-[#d6f3ec]',
   } as const;
 
   const topbarThemeClasses = {
     light: 'bg-white border-black/8',
     paper: 'bg-[#FDFCF8] border-black/5',
     dark: 'bg-[#1A1A1A] border-white/10',
+    eye: 'bg-[#073842]/88 border-[#27b39c]/25 backdrop-blur-xl',
   } as const;
   const topbarSearchClasses = {
     light: 'bg-[#f1f1f4] text-[#1A1A1A] placeholder:text-black/25 focus:ring-black/10',
     paper: 'bg-[#f9f9fb] text-[#1A1A1A] placeholder:text-black/10 focus:ring-black/5',
     dark: 'bg-white/6 text-[#DADADA] placeholder:text-white/35 focus:ring-white/20',
+    eye: 'bg-[#0b4a53]/70 text-[#d8f4ee] placeholder:text-[#8ed2c6]/65 focus:ring-[#1fc7ab]/35',
   } as const;
   const topbarIconClasses = {
     light: 'text-black/30 group-focus-within:text-black/60',
     paper: 'text-black/20 group-focus-within:text-black/50',
     dark: 'text-white/40 group-focus-within:text-white/80',
+    eye: 'text-[#8ed2c6]/65 group-focus-within:text-[#b9f4e7]',
   } as const;
   const readerTabBarClasses = {
     light: 'border-black/8 bg-[#F6F6F6]',
     paper: 'border-black/5 bg-[#FDFCF8]',
     dark: 'border-white/10 bg-[#181818]',
+    eye: 'border-[#1aa892]/25 bg-[#063b45]/72',
   } as const;
   const readerTabActiveClasses = {
     light: 'bg-white border-black/20 border-b-white',
     paper: 'bg-white border-black/15 border-b-white shadow-sm',
     dark: 'bg-[#222] border-white/20 border-b-[#222]',
+    eye: 'bg-[#0d5961] border-[#2cd0b2]/35 border-b-[#0d5961] text-[#d8f5ee]',
   } as const;
   const readerTabInactiveClasses = {
     light: 'bg-[#efefef] border-black/10 hover:bg-[#e7e7e7]',
     paper: 'bg-[#f3f0e8] border-black/10 hover:bg-[#ece8dd]',
     dark: 'bg-[#141414] border-white/12 hover:bg-[#1d1d1d]',
+    eye: 'bg-[#083c45] border-[#1aa892]/20 hover:bg-[#0b4a53] text-[#9edfd3]',
   } as const;
   const tabMenuClasses = {
     light: 'bg-white border-black/12',
     paper: 'bg-[#FDFCF8] border-black/10',
     dark: 'bg-[#1A1A1A] border-white/12 text-[#D5D5D5]',
+    eye: 'bg-[#0a4650] border-[#28b59e]/30 text-[#d8f4ee]',
   } as const;
   const chatSectionClasses = {
     light: 'bg-[#F3F3F3] border-black/8',
     paper: 'bg-white border-black/5',
     dark: 'bg-[#121212] border-white/10',
+    eye: 'bg-[#062f38]/82 border-[#1aa892]/22',
   } as const;
 
   return (
@@ -864,6 +893,7 @@ export default function App() {
                   isOverviewOpen={isOverviewOpen}
                   onOpenOverview={() => setIsOverviewOpen(true)}
                   onCloseOverview={() => setIsOverviewOpen(false)}
+                  onBookmarksChange={(bookmarks) => void updateBookmarksForBook(displayBook.id, bookmarks)}
                 />
               </section>
 

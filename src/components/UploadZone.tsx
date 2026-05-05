@@ -8,7 +8,7 @@ interface UploadZoneProps {
   onClose: () => void;
   onUpload: (file: File) => void;
   isUploading: boolean;
-  theme: 'paper' | 'light' | 'dark';
+  theme: 'paper' | 'light' | 'dark' | 'eye';
 }
 
 export function UploadZone({ onClose, onUpload, isUploading, theme }: UploadZoneProps) {
@@ -16,56 +16,67 @@ export function UploadZone({ onClose, onUpload, isUploading, theme }: UploadZone
     light: 'bg-[#FBFBFC] border border-black/8 text-[#222]',
     paper: 'bg-[#FDFCF8] border border-black/10 text-[#2C2C2C]',
     dark: 'bg-[#181818] border border-white/12 text-[#D4D4D4]',
+    eye: 'bg-[#063941] border border-[#22b79f]/28 text-[#cbefe8]',
   } as const;
   const headerBorder = {
     light: 'border-black/8',
     paper: 'border-[#E5E2DD]',
     dark: 'border-white/10',
+    eye: 'border-[#22b79f]/24',
   } as const;
   const closeBtn = {
     light: 'hover:bg-black/5',
     paper: 'hover:bg-gray-100',
     dark: 'hover:bg-white/10',
+    eye: 'hover:bg-[#0d5560]',
   } as const;
   const closeIcon = {
     light: 'text-black/45',
     paper: 'text-[#8A8A8A]',
     dark: 'text-white/55',
+    eye: 'text-[#91d4c8]/90',
   } as const;
   const dropBase = {
     light: 'border-black/15 hover:border-black/30 hover:bg-black/[0.02]',
     paper: 'border-[#E5E2DD] hover:border-[#9A8C73] hover:bg-[#F9F8F6]',
     dark: 'border-white/20 hover:border-sky-300/50 hover:bg-white/5',
+    eye: 'border-[#21b39c]/40 hover:border-[#3bddc0]/60 hover:bg-[#0a4f58]',
   } as const;
   const dropActive = {
     light: 'border-black/35 bg-black/[0.03]',
     paper: 'border-[#9A8C73] bg-[#9A8C73]/5',
     dark: 'border-sky-300/70 bg-sky-300/10',
+    eye: 'border-[#34d2b7]/70 bg-[#1ebea3]/15',
   } as const;
   const iconWrap = {
     light: 'bg-black/8 text-black/65',
     paper: 'bg-[#F3F0EC] text-[#9A8C73]',
     dark: 'bg-white/10 text-sky-300',
+    eye: 'bg-[#1ebea3]/18 text-[#74e8d3]',
   } as const;
   const subText = {
     light: 'text-black/55',
     paper: 'text-[#8A8A8A]',
     dark: 'text-white/55',
+    eye: 'text-[#9bded2]/85',
   } as const;
   const ctaBtn = {
     light: 'bg-[#1E1E1E] text-white hover:bg-black',
     paper: 'bg-[#2C2C2C] text-white hover:bg-black',
     dark: 'bg-[#E2E2E2] text-[#191919] hover:bg-white',
+    eye: 'bg-[#1db69e] text-[#05323b] hover:bg-[#2bd9bb]',
   } as const;
   const notice = {
     light: 'bg-black/[0.02] border-black/10',
     paper: 'bg-[#F9F8F6] border-[#E5E2DD]',
     dark: 'bg-white/5 border-white/10',
+    eye: 'bg-[#0a4a53]/45 border-[#20b39b]/25',
   } as const;
   const noticeIcon = {
     light: 'text-black/55',
     paper: 'text-[#9A8C73]',
     dark: 'text-sky-300',
+    eye: 'text-[#66e2cb]',
   } as const;
 
   const onDrop = useCallback((acceptedFiles: File[]) => {

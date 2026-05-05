@@ -19,6 +19,16 @@ export interface Book {
   sourceFileSizeBytes?: number;
   pageCount?: number;
   fingerprint?: string;
+  bookmarks?: BookBookmark[];
+}
+
+export interface BookBookmark {
+  id: string;
+  page: number;
+  name?: string;
+  note?: string;
+  paragraphAnchor?: number;
+  createdAt: string;
 }
 
 export interface ReadingProgress {

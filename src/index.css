@@ -92,3 +92,35 @@
   background: rgba(26, 26, 26, 0.26);
   background-clip: content-box;
 }
+
+/* TOC typography */
+.chapter-title {
+  font-family: 'Inter', 'Source Han Sans CN', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 8px;
+  letter-spacing: 0.03em;
+}
+
+.section-title {
+  font-family: 'Inter', 'Source Han Sans CN', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.6);
+  padding-left: 16px;
+  line-height: 2;
+}
+
+.toc-light .chapter-title,
+.toc-paper .chapter-title,
+.toc-eye .chapter-title {
+  color: inherit;
+}
+
+.toc-light .section-title,
+.toc-paper .section-title,
+.toc-eye .section-title {
+  color: inherit;
+  opacity: 0.75;
+}

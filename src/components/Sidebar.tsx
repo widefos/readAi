@@ -15,7 +15,7 @@ interface SidebarProps {
   setView: (view: 'bookshelf' | 'reader') => void;
   hasOpenReaderTabs?: boolean;
   onUpload: () => void;
-  theme: 'paper' | 'light' | 'dark';
+  theme: 'paper' | 'light' | 'dark' | 'eye';
 }
 
 export function Sidebar({ view, setView, hasOpenReaderTabs = false, onUpload, theme }: SidebarProps) {
@@ -23,50 +23,59 @@ export function Sidebar({ view, setView, hasOpenReaderTabs = false, onUpload, th
     light: 'bg-[#FCFCFD] border-black/10 text-[#141414]',
     paper: 'bg-[#F4F1EA] border-[#1A1A1A]/10 text-[#1A1A1A]',
     dark: 'bg-[#151515] border-white/10 text-[#D1D1D1]',
+    eye: 'bg-[linear-gradient(180deg,#042f36_0%,#053841_100%)] border-[#23b8a0]/18 text-[#c8efe7]',
   } as const;
   const brandMarkClasses = {
     light: 'bg-[#111]',
     paper: 'bg-[#1A1A1A]',
     dark: 'bg-[#E5E5E5]',
+    eye: 'bg-[#16b69d]',
   } as const;
   const brandInnerClasses = {
     light: 'bg-[#FCFCFD]',
     paper: 'bg-[#FDFCF8]',
     dark: 'bg-[#151515]',
+    eye: 'bg-[#063840]',
   } as const;
   const navHintClasses = {
     light: 'text-black/35',
     paper: 'text-[#1A1A1A]/30',
     dark: 'text-white/30',
+    eye: 'text-[#7ec9bc]/75',
   } as const;
   const navActiveClasses = {
     light: 'bg-black/8 text-black',
     paper: 'bg-black/5 text-[#1A1A1A]',
     dark: 'bg-white/10 text-[#F3F3F3]',
+    eye: 'bg-[#0d5a60] text-[#d7f6ef]',
   } as const;
   const navInactiveClasses = {
     light: 'text-black/50 hover:bg-black/[0.035] hover:text-black/80',
     paper: 'text-[#1A1A1A]/40 hover:bg-black/[0.02] hover:text-[#1A1A1A]/70',
     dark: 'text-white/45 hover:bg-white/[0.04] hover:text-white/80',
+    eye: 'text-[#8ccfc3]/80 hover:bg-[#0b5057] hover:text-[#ddf8f2]',
   } as const;
-  const navBarClasses = { light: 'bg-[#111]', paper: 'bg-[#1A1A1A]', dark: 'bg-[#F3F3F3]' } as const;
-  const dividerClasses = { light: 'border-black/8', paper: 'border-black/5', dark: 'border-white/10' } as const;
+  const navBarClasses = { light: 'bg-[#111]', paper: 'bg-[#1A1A1A]', dark: 'bg-[#F3F3F3]', eye: 'bg-[#1fd1b3]' } as const;
+  const dividerClasses = { light: 'border-black/8', paper: 'border-black/5', dark: 'border-white/10', eye: 'border-[#21af98]/20' } as const;
   const uploadClasses = {
     light: 'text-black/55 hover:text-black bg-black/5 hover:border-black/20',
     paper: 'text-[#1A1A1A]/40 hover:text-black bg-black/5 hover:border-black/10',
     dark: 'text-white/70 hover:text-white bg-white/5 hover:border-white/20',
+    eye: 'text-[#8dd7ca] hover:text-[#d9f8f1] bg-[#0b4a53]/60 hover:border-[#25c5a9]/35',
   } as const;
-  const cardClasses = { light: 'bg-black/[0.02] border-black/10', paper: 'bg-white/50 border-black/5', dark: 'bg-white/5 border-white/10' } as const;
+  const cardClasses = { light: 'bg-black/[0.02] border-black/10', paper: 'bg-white/50 border-black/5', dark: 'bg-white/5 border-white/10', eye: 'bg-[#0a4650]/60 border-[#25b9a1]/24 backdrop-blur-sm' } as const;
   const avatarClasses = {
     light: 'bg-[#101010] text-white ring-black/10',
     paper: 'bg-[#1A1A1A] text-white ring-black/5',
     dark: 'bg-[#E5E5E5] text-[#1A1A1A] ring-white/10',
+    eye: 'bg-[#18b49c] text-[#073a43] ring-[#25b9a1]/24',
   } as const;
-  const modeTextClasses = { light: 'text-black/50', paper: 'text-[#1A1A1A]/40', dark: 'text-white/40' } as const;
+  const modeTextClasses = { light: 'text-black/50', paper: 'text-[#1A1A1A]/40', dark: 'text-white/40', eye: 'text-[#86cfc2]/80' } as const;
   const modePanelClasses = {
     light: 'bg-white border-black/15 text-black/70',
     paper: 'bg-white border-black/10 text-[#1A1A1A]/70',
     dark: 'bg-[#101010] border-white/15 text-white/75',
+    eye: 'bg-[#063b44] border-[#20b29b]/28 text-[#c9f0e8]',
   } as const;
 
   const navItems = [
