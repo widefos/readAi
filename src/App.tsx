@@ -6,7 +6,7 @@ import { ReaderPanel } from './components/ReaderPanel';
 import { ChatPanel } from './components/ChatPanel';
 import { UploadZone } from './components/UploadZone';
 import { Bookshelf } from './components/Bookshelf';
-import { askAboutBook, summarizeBook } from './services/geminiService';
+import { askAboutBookStream, checkModelHealth } from './services/geminiService';
 import { buildChatContext } from './engines/chatContextEngine';
 import { importBookFile, resolvePdfPageCount } from './engines/bookImportEngine';
 import { AnimatePresence, motion } from 'motion/react';
@@ -42,10 +42,14 @@ export default function App() {
   const [isResizing, setIsResizing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [theme, setTheme] = useState<'paper' | 'light' | 'dark'>('paper');
+  const [aiStatus, setAiStatus] = useState<'checking' | 'ready' | 'error'>('checking');
+  const [aiStatusMessage, setAiStatusMessage] = useState<string>('');
   const hydratingBookIdsRef = useRef<Set<string>>(new Set());
   const progressRef = useRef<Record<string, number>>({});
   const progressAnchorsRef = useRef<Record<string, number>>({});
   const readingDurationsRef = useRef<Record<string, number>>({});
+  const aiAbortControllerRef = useRef<AbortController | null>(null);
+  const aiHealthCheckingRef = useRef(false);
 
   const buildLegacyFingerprint = async (book: Book) => {
     const raw = `${book.title}|${book.sourceFileName || ''}|${book.fileType}|${book.content}`;
@@ -225,6 +229,23 @@ export default function App() {
     return () => window.removeEventListener('click', closeMenu);
   }, [tabMenu]);
 
+  const runModelHealthCheck = useCallback(async () => {
+    if (aiHealthCheckingRef.current) return;
+    aiHealthCheckingRef.current = true;
+    setAiStatus('checking');
+    setAiStatusMessage('');
+    try {
+      await checkModelHealth();
+      setAiStatus('ready');
+      setAiStatusMessage('');
+    } catch (error: any) {
+      setAiStatus('error');
+      setAiStatusMessage(error?.message || '未知错误');
+    } finally {
+      aiHealthCheckingRef.current = false;
+    }
+  }, []);
+
   const closeReaderTab = (bookId: string) => {
     setOpenReaderBookIds((prev) => {
       const next = prev.filter((id) => id !== bookId);
@@ -349,65 +370,107 @@ export default function App() {
   };
 
   const handleSendMessage = async (text: string) => {
+    if (aiAbortControllerRef.current) {
+      aiAbortControllerRef.current.abort();
+      aiAbortControllerRef.current = null;
+    }
     if (!activeBookId) return;
     const book = books.find((b) => b.id === activeBookId);
     if (!book) return;
 
+    const bookId = activeBookId;
+    console.log('[AI_STREAM_APP] send:start', { bookId, textLength: text.length });
     const currentHistory = chats[activeBookId] || [];
     const currentPage = progress[activeBookId] || 0;
     const askContent = buildChatContext(book, currentPage);
     const userMsg: ChatMessage = { role: 'user', content: text, timestamp: new Date().toISOString() };
     const nextMsgs = [...currentHistory, userMsg];
-    setChats((prev) => ({ ...prev, [activeBookId]: nextMsgs }));
+    setChats((prev) => ({ ...prev, [bookId]: nextMsgs }));
     if (window.electronAPI?.saveChat) {
-      await window.electronAPI.saveChat({ bookId: activeBookId, messages: nextMsgs });
+      await window.electronAPI.saveChat({ bookId, messages: nextMsgs });
     } else {
-      const nextChats = { ...chats, [activeBookId]: nextMsgs };
+      const nextChats = { ...chats, [bookId]: nextMsgs };
       localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
     }
     setIsAiLoading(true);
+    const controller = new AbortController();
+    aiAbortControllerRef.current = controller;
+
+    const aiTimestamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const aiPlaceholder: ChatMessage = { role: 'model', content: '', timestamp: aiTimestamp };
+    setChats((prev) => ({ ...prev, [bookId]: [...(prev[bookId] || nextMsgs), aiPlaceholder] }));
+    let streamedContent = '';
 
     try {
-      const aiResponse = await askAboutBook(book.title, askContent, currentHistory, text);
-      const aiMsg: ChatMessage = { role: 'model', content: aiResponse || '抱歉，我暂时无法回答。', timestamp: new Date().toISOString() };
-      const finalMessages = [...nextMsgs, aiMsg];
-      setChats((prev) => ({ ...prev, [activeBookId]: finalMessages }));
+      await askAboutBookStream(book.title, askContent, currentHistory, text, (chunk) => {
+        streamedContent += chunk;
+        console.log('[AI_STREAM_CHUNK]', {
+          bookId,
+          chunkLength: chunk.length,
+          totalLength: streamedContent.length,
+          previewTail: streamedContent.slice(-60),
+        });
+        setChats((prev) => {
+          const existing = prev[bookId] || [];
+          const updated = existing.map((msg) =>
+            msg.timestamp === aiTimestamp ? { ...msg, content: streamedContent } : msg,
+          );
+          return { ...prev, [bookId]: updated };
+        });
+      }, controller.signal);
+
+      const finalContent = streamedContent.trim() || '抱歉，我暂时无法回答。';
+      console.log('[AI_STREAM_APP] send:complete', { bookId, totalLength: finalContent.length });
+      const finalMessages = [...nextMsgs, { role: 'model' as const, content: finalContent, timestamp: aiTimestamp }];
+      setChats((prev) => ({ ...prev, [bookId]: finalMessages }));
       if (window.electronAPI?.saveChat) {
-        await window.electronAPI.saveChat({ bookId: activeBookId, messages: finalMessages });
+        await window.electronAPI.saveChat({ bookId, messages: finalMessages });
       } else {
-        const nextChats = { ...chats, [activeBookId]: finalMessages };
+        const nextChats = { ...chats, [bookId]: finalMessages };
         localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
       }
     } catch (error: any) {
+      console.log('[AI_STREAM_APP] send:error', { bookId, name: error?.name, message: error?.message });
+      if (error?.name === 'AbortError') {
+        const finalContent = streamedContent.trim() || '已停止生成。';
+        const finalMessages = [...nextMsgs, { role: 'model' as const, content: finalContent, timestamp: aiTimestamp }];
+        setChats((prev) => ({ ...prev, [bookId]: finalMessages }));
+        if (window.electronAPI?.saveChat) {
+          await window.electronAPI.saveChat({ bookId, messages: finalMessages });
+        } else {
+          const nextChats = { ...chats, [bookId]: finalMessages };
+          localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
+        }
+        return;
+      }
       const failMsg: ChatMessage = {
         role: 'model',
         content: `当前模型请求失败：${error?.message || '未知错误'}。请稍后重试。`,
-        timestamp: new Date().toISOString(),
+        timestamp: aiTimestamp,
       };
       const finalMessages = [...nextMsgs, failMsg];
-      setChats((prev) => ({ ...prev, [activeBookId]: finalMessages }));
+      setChats((prev) => ({ ...prev, [bookId]: finalMessages }));
       if (window.electronAPI?.saveChat) {
-        await window.electronAPI.saveChat({ bookId: activeBookId, messages: finalMessages });
+        await window.electronAPI.saveChat({ bookId, messages: finalMessages });
       } else {
-        const nextChats = { ...chats, [activeBookId]: finalMessages };
+        const nextChats = { ...chats, [bookId]: finalMessages };
         localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
       }
     } finally {
+      aiAbortControllerRef.current = null;
       setIsAiLoading(false);
     }
   };
 
+  const handleStopGenerate = () => {
+    if (!aiAbortControllerRef.current) return;
+    aiAbortControllerRef.current.abort();
+    aiAbortControllerRef.current = null;
+  };
+
   const handleSummarize = async () => {
     if (!activeBookId) return;
-    const book = books.find((b) => b.id === activeBookId);
-    if (!book) return;
-    setIsAiLoading(true);
-    try {
-      const summary = await summarizeBook(book.title, book.content);
-      await handleSendMessage(`请为我总结这本书：${summary}`);
-    } finally {
-      setIsAiLoading(false);
-    }
+    await handleSendMessage('请为我总结这本书，按“核心观点、结构脉络、关键细节、可执行启发”四部分输出。');
   };
 
   const updateProgressForBook = useCallback((bookId: string, page: number, paragraphAnchor?: number) => {
@@ -573,6 +636,11 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [view, displayBook?.id, addReadingSecondsForBook]);
+
+  useEffect(() => {
+    if (view !== 'reader') return;
+    void runModelHealthCheck();
+  }, [view, runModelHealthCheck]);
 
   if (isLoading) {
     return (
@@ -809,8 +877,12 @@ export default function App() {
                   theme={theme}
                   messages={chats[displayBook.id] || []}
                   onSendMessage={handleSendMessage}
+                  onStopGenerate={handleStopGenerate}
                   onSummarize={handleSummarize}
                   isLoading={isAiLoading}
+                  aiStatus={aiStatus}
+                  aiStatusMessage={aiStatusMessage}
+                  onRetryHealth={() => void runModelHealthCheck()}
                   pendingQuote={pendingQuote}
                   onClearQuote={() => setPendingQuote(null)}
                   onClear={async () => {

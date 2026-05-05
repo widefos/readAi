@@ -1,5 +1,5 @@
 ﻿import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Trash2, ArrowDown, CornerDownRight, X } from 'lucide-react';
+import { Sparkles, Trash2, ArrowDown, CornerDownRight, X, Square } from 'lucide-react';
 import { Book, ChatMessage } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -10,15 +10,19 @@ interface ChatPanelProps {
   book: Book;
   messages: ChatMessage[];
   onSendMessage: (text: string) => void;
+  onStopGenerate: () => void;
   onSummarize: () => void;
   isLoading: boolean;
+  aiStatus: 'checking' | 'ready' | 'error';
+  aiStatusMessage?: string;
+  onRetryHealth?: () => void;
   onClear: () => void;
   pendingQuote?: string | null;
   onClearQuote?: () => void;
   theme: 'paper' | 'light' | 'dark';
 }
 
-export function ChatPanel({ messages, onSendMessage, onSummarize, isLoading, onClear, pendingQuote, onClearQuote, theme }: ChatPanelProps) {
+export function ChatPanel({ messages, onSendMessage, onStopGenerate, onSummarize, isLoading, aiStatus, aiStatusMessage, onRetryHealth, onClear, pendingQuote, onClearQuote, theme }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isDark = theme === 'dark';
@@ -128,7 +132,12 @@ export function ChatPanel({ messages, onSendMessage, onSummarize, isLoading, onC
                             <div>{msg.content.split('\n\n').slice(1).join('\n\n')}</div>
                           </div>
                         ) : msg.role === 'model' ? (
-                          <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></div>
+                          <div className="markdown-body">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                            {isLoading && i === messages.length - 1 && (
+                              <span className="inline-block w-[2px] h-[1.05em] ml-1 align-[-2px] bg-current animate-pulse opacity-80" />
+                            )}
+                          </div>
                         ) : msg.content}
                       </div>
                     </div>
@@ -151,9 +160,19 @@ export function ChatPanel({ messages, onSendMessage, onSummarize, isLoading, onC
         <div className="shrink-0 mt-auto pt-6">
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-tighter opacity-70">
-              <span className="flex items-center gap-2"><span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>全书逻辑引擎已就绪</span>
+              <span className="flex items-center gap-2">
+                <span className={cn('w-1.5 h-1.5 rounded-full', aiStatus === 'ready' ? 'bg-green-500' : aiStatus === 'checking' ? 'bg-amber-400 animate-pulse' : 'bg-red-500')} />
+                {aiStatus === 'ready' ? '全书逻辑引擎已就绪' : aiStatus === 'checking' ? '模型连通性检测中' : `模型连接异常${aiStatusMessage ? `：${aiStatusMessage}` : ''}`}
+              </span>
               <span>Gemini 3.1 Pro</span>
             </div>
+            {aiStatus === 'error' && (
+              <div className="text-[10px] opacity-70">
+                <button type="button" onClick={onRetryHealth} className="underline underline-offset-2 hover:opacity-100 opacity-80">
+                  重新检测模型连接
+                </button>
+              </div>
+            )}
             <form onSubmit={handleSubmit} className={cn('relative flex flex-col gap-0 overflow-hidden', composerClasses[theme])}>
               <AnimatePresence>
                 {pendingQuote && (
@@ -168,9 +187,25 @@ export function ChatPanel({ messages, onSendMessage, onSummarize, isLoading, onC
               </AnimatePresence>
               <div className="relative flex items-center">
                 <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="询问关于整本书的问题..." className={cn('w-full p-4 pr-12 text-sm rounded-none focus:outline-none', inputClasses[theme])} />
-                <button type="submit" disabled={!input.trim() || isLoading} className={cn('absolute right-4 w-8 h-8 flex items-center justify-center transition-all hover:scale-105 active:scale-95 disabled:opacity-20', sendBtnClasses[theme])}>
-                  <ArrowDown className="w-4 h-4 rotate-[270deg]" />
-                </button>
+                {isLoading ? (
+                  <button
+                    type="button"
+                    onClick={onStopGenerate}
+                    className={cn('absolute right-4 w-8 h-8 flex items-center justify-center transition-all hover:scale-105 active:scale-95', sendBtnClasses[theme])}
+                    title="停止生成"
+                  >
+                    <Square className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!input.trim()}
+                    className={cn('absolute right-4 w-8 h-8 flex items-center justify-center transition-all hover:scale-105 active:scale-95 disabled:opacity-20', sendBtnClasses[theme])}
+                    title="发送"
+                  >
+                    <ArrowDown className="w-4 h-4 rotate-[270deg]" />
+                  </button>
+                )}
               </div>
             </form>
           </div>

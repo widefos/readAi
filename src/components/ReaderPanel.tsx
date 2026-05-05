@@ -66,6 +66,12 @@ export function ReaderPanel({
   const lastAppliedExternalAnchorRef = useRef<number | null>(null);
   const textPaginationReadyRef = useRef<boolean>(isPdfBook);
   const isTypographyAdjustingRef = useRef(false);
+  const animationTypeRef = useRef(animationType);
+  const animationSpeedRef = useRef(animationSpeed);
+  useEffect(() => {
+    animationTypeRef.current = animationType;
+    animationSpeedRef.current = animationSpeed;
+  }, [animationType, animationSpeed]);
   const totalPages = isPdfBook ? engine.totalPages : Math.max(1, textPageStarts.length);
   const cjkCharCount = (book.content.match(/[\u3400-\u9FFF\uF900-\uFAFF]/g) || []).length;
   const latinWordCount = (book.content.match(/[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*/g) || []).length;
@@ -170,13 +176,15 @@ export function ReaderPanel({
     const container = contentRef.current;
     if (!container) return;
 
-    const delayMs = animationType === 'none' ? 0 : Math.max(0, Math.round(animationSpeed * 1000));
+    const delayMs = animationTypeRef.current === 'none'
+      ? 0
+      : Math.max(0, Math.round(animationSpeedRef.current * 1000));
     const timer = window.setTimeout(() => {
       if (contentRef.current) contentRef.current.scrollTop = 0;
     }, delayMs);
 
     return () => window.clearTimeout(timer);
-  }, [currentPage, animationType, animationSpeed]);
+  }, [currentPage]);
 
   useEffect(() => {
     textPaginationReadyRef.current = isPdfBook;
@@ -542,11 +550,3 @@ export function ReaderPanel({
     </div>
   );
 }
-
-
-
-
-
-
-
-
