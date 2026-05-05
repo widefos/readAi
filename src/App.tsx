@@ -15,6 +15,8 @@ const BOOKS_KEY = 'ai-reader-books';
 const CHATS_KEY = 'ai-reader-chats';
 const PROGRESS_KEY = 'ai-reader-progress';
 const PROGRESS_ANCHOR_KEY = 'ai-reader-progress-anchor';
+const READING_DURATION_KEY = 'ai-reader-reading-duration';
+const THEME_KEY = 'ai-reader-theme';
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
@@ -26,6 +28,7 @@ export default function App() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [progressAnchors, setProgressAnchors] = useState<Record<string, number>>({});
+  const [readingDurations, setReadingDurations] = useState<Record<string, number>>({});
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
   const [isOverviewOpen, setIsOverviewOpen] = useState(false);
   const [pendingDeleteBook, setPendingDeleteBook] = useState<Book | null>(null);
@@ -38,8 +41,11 @@ export default function App() {
   const [readerWidth, setReaderWidth] = useState(60);
   const [isResizing, setIsResizing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [theme, setTheme] = useState<'paper' | 'light' | 'dark'>('paper');
   const hydratingBookIdsRef = useRef<Set<string>>(new Set());
   const progressRef = useRef<Record<string, number>>({});
+  const progressAnchorsRef = useRef<Record<string, number>>({});
+  const readingDurationsRef = useRef<Record<string, number>>({});
 
   const buildLegacyFingerprint = async (book: Book) => {
     const raw = `${book.title}|${book.sourceFileName || ''}|${book.fileType}|${book.content}`;
@@ -109,6 +115,7 @@ export default function App() {
           setChats(data.chats || {});
           setProgress(data.progress || {});
           setProgressAnchors(data.progressAnchors || {});
+          setReadingDurations(data.readingDurations || {});
         } else {
           const savedBooks = JSON.parse(localStorage.getItem(BOOKS_KEY) || '[]') as Book[];
           const needsMigration = savedBooks.filter((b) => !b.fingerprint);
@@ -124,9 +131,13 @@ export default function App() {
           const savedChats = JSON.parse(localStorage.getItem(CHATS_KEY) || '{}') as Record<string, ChatMessage[]>;
           const savedProgress = JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') as Record<string, number>;
           const savedAnchors = JSON.parse(localStorage.getItem(PROGRESS_ANCHOR_KEY) || '{}') as Record<string, number>;
+          const savedReadingDurations = JSON.parse(localStorage.getItem(READING_DURATION_KEY) || '{}') as Record<string, number>;
+          const savedTheme = (localStorage.getItem(THEME_KEY) as 'paper' | 'light' | 'dark' | null) || 'paper';
           setChats(savedChats);
           setProgress(savedProgress);
           setProgressAnchors(savedAnchors);
+          setReadingDurations(savedReadingDurations);
+          setTheme(savedTheme);
         }
       } finally {
         setIsLoading(false);
@@ -136,8 +147,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  useEffect(() => {
     progressRef.current = progress;
   }, [progress]);
+
+  useEffect(() => {
+    progressAnchorsRef.current = progressAnchors;
+  }, [progressAnchors]);
+
+  useEffect(() => {
+    readingDurationsRef.current = readingDurations;
+  }, [readingDurations]);
 
   useEffect(() => {
     const targets = books.filter(
@@ -302,6 +325,7 @@ export default function App() {
         cover: imported.cover,
         pdfPath: imported.pdfPath,
         sourceFileName: file.name,
+        sourceFileSizeBytes: file.size,
         pageCount: imported.pageCount,
         fingerprint: imported.fingerprint,
       };
@@ -398,13 +422,19 @@ export default function App() {
       setProgressAnchors((prev) => (prev[bookId] === paragraphAnchor ? prev : { ...prev, [bookId]: paragraphAnchor }));
     }
     if (window.electronAPI?.saveProgress) {
-      void window.electronAPI.saveProgress({ bookId, currentPage: page, paragraphAnchor });
+      void window.electronAPI.saveProgress({
+        bookId,
+        currentPage: page,
+        paragraphAnchor,
+        readingSeconds: readingDurationsRef.current[bookId] ?? 0,
+      });
     } else {
       const nextProgress = { ...progress, [bookId]: page };
       const nextAnchors =
         paragraphAnchor !== undefined ? { ...progressAnchors, [bookId]: paragraphAnchor } : progressAnchors;
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
       localStorage.setItem(PROGRESS_ANCHOR_KEY, JSON.stringify(nextAnchors));
+      localStorage.setItem(READING_DURATION_KEY, JSON.stringify(readingDurationsRef.current));
     }
   }, [progress, progressAnchors]);
 
@@ -412,13 +442,40 @@ export default function App() {
     setProgressAnchors((prev) => (prev[bookId] === paragraphAnchor ? prev : { ...prev, [bookId]: paragraphAnchor }));
     const currentPage = progressRef.current[bookId] ?? 0;
     if (window.electronAPI?.saveProgress) {
-      void window.electronAPI.saveProgress({ bookId, currentPage, paragraphAnchor });
+      void window.electronAPI.saveProgress({
+        bookId,
+        currentPage,
+        paragraphAnchor,
+        readingSeconds: readingDurationsRef.current[bookId] ?? 0,
+      });
     } else {
       const nextAnchors = { ...progressAnchors, [bookId]: paragraphAnchor };
       localStorage.setItem(PROGRESS_ANCHOR_KEY, JSON.stringify(nextAnchors));
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(progressRef.current));
+      localStorage.setItem(READING_DURATION_KEY, JSON.stringify(readingDurationsRef.current));
     }
   }, [progressAnchors]);
+
+  const addReadingSecondsForBook = useCallback((bookId: string, deltaSeconds: number) => {
+    if (deltaSeconds <= 0) return;
+    setReadingDurations((prev) => {
+      const nextValue = (prev[bookId] ?? 0) + deltaSeconds;
+      const next = { ...prev, [bookId]: nextValue };
+      if (!window.electronAPI?.saveProgress) {
+        localStorage.setItem(READING_DURATION_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+
+    if (window.electronAPI?.saveProgress) {
+      void window.electronAPI.saveProgress({
+        bookId,
+        currentPage: progressRef.current[bookId] ?? 0,
+        paragraphAnchor: progressAnchorsRef.current[bookId],
+        readingSeconds: (readingDurationsRef.current[bookId] ?? 0) + deltaSeconds,
+      });
+    }
+  }, []);
 
   const performDeleteBook = async (book: Book) => {
     setBooks((prev) => prev.filter((b) => b.id !== book.id));
@@ -433,6 +490,11 @@ export default function App() {
       return next;
     });
     setProgressAnchors((prev) => {
+      const next = { ...prev };
+      delete next[book.id];
+      return next;
+    });
+    setReadingDurations((prev) => {
       const next = { ...prev };
       delete next[book.id];
       return next;
@@ -456,13 +518,16 @@ export default function App() {
       const nextChats = { ...chats };
       const nextProgress = { ...progress };
       const nextAnchors = { ...progressAnchors };
+      const nextReadingDurations = { ...readingDurations };
       delete nextChats[book.id];
       delete nextProgress[book.id];
       delete nextAnchors[book.id];
+      delete nextReadingDurations[book.id];
       localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
       localStorage.setItem(CHATS_KEY, JSON.stringify(nextChats));
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(nextProgress));
       localStorage.setItem(PROGRESS_ANCHOR_KEY, JSON.stringify(nextAnchors));
+      localStorage.setItem(READING_DURATION_KEY, JSON.stringify(nextReadingDurations));
     }
   };
 
@@ -481,6 +546,34 @@ export default function App() {
     }
   }, [hasOpenTabs, openReaderBooks, activeBookId]);
 
+  useEffect(() => {
+    if (view !== 'reader' || !displayBook) return;
+    const bookId = displayBook.id;
+    let lastTickAt = Date.now();
+
+    const flushElapsed = () => {
+      const now = Date.now();
+      const elapsedSeconds = Math.floor((now - lastTickAt) / 1000);
+      if (elapsedSeconds > 0) {
+        addReadingSecondsForBook(bookId, elapsedSeconds);
+        lastTickAt = now;
+      }
+    };
+
+    const timer = window.setInterval(flushElapsed, 5000);
+    const onVisibilityChange = () => {
+      if (document.hidden) flushElapsed();
+      else lastTickAt = Date.now();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      flushElapsed();
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [view, displayBook?.id, addReadingSecondsForBook]);
+
   if (isLoading) {
     return (
       <div className="h-screen w-full flex items-center justify-center bg-[#F9F8F6]">
@@ -489,17 +582,64 @@ export default function App() {
     );
   }
 
+  const appThemeClasses = {
+    light: 'bg-[#F7F7F7] text-[#1A1A1A]',
+    paper: 'bg-[#F4F1EA] text-[#1A1A1A]',
+    dark: 'bg-[#111111] text-[#D1D1D1]',
+  } as const;
+
+  const topbarThemeClasses = {
+    light: 'bg-white border-black/8',
+    paper: 'bg-[#FDFCF8] border-black/5',
+    dark: 'bg-[#1A1A1A] border-white/10',
+  } as const;
+  const topbarSearchClasses = {
+    light: 'bg-[#f1f1f4] text-[#1A1A1A] placeholder:text-black/25 focus:ring-black/10',
+    paper: 'bg-[#f9f9fb] text-[#1A1A1A] placeholder:text-black/10 focus:ring-black/5',
+    dark: 'bg-white/6 text-[#DADADA] placeholder:text-white/35 focus:ring-white/20',
+  } as const;
+  const topbarIconClasses = {
+    light: 'text-black/30 group-focus-within:text-black/60',
+    paper: 'text-black/20 group-focus-within:text-black/50',
+    dark: 'text-white/40 group-focus-within:text-white/80',
+  } as const;
+  const readerTabBarClasses = {
+    light: 'border-black/8 bg-[#F6F6F6]',
+    paper: 'border-black/5 bg-[#FDFCF8]',
+    dark: 'border-white/10 bg-[#181818]',
+  } as const;
+  const readerTabActiveClasses = {
+    light: 'bg-white border-black/20 border-b-white',
+    paper: 'bg-white border-black/15 border-b-white shadow-sm',
+    dark: 'bg-[#222] border-white/20 border-b-[#222]',
+  } as const;
+  const readerTabInactiveClasses = {
+    light: 'bg-[#efefef] border-black/10 hover:bg-[#e7e7e7]',
+    paper: 'bg-[#f3f0e8] border-black/10 hover:bg-[#ece8dd]',
+    dark: 'bg-[#141414] border-white/12 hover:bg-[#1d1d1d]',
+  } as const;
+  const tabMenuClasses = {
+    light: 'bg-white border-black/12',
+    paper: 'bg-[#FDFCF8] border-black/10',
+    dark: 'bg-[#1A1A1A] border-white/12 text-[#D5D5D5]',
+  } as const;
+  const chatSectionClasses = {
+    light: 'bg-[#F3F3F3] border-black/8',
+    paper: 'bg-white border-black/5',
+    dark: 'bg-[#121212] border-white/10',
+  } as const;
+
   return (
-    <div className="h-screen w-full flex overflow-hidden bg-[#F4F1EA] text-[#1A1A1A]">
-      <Sidebar view={view} setView={setView} hasOpenReaderTabs={hasOpenTabs} onUpload={() => setIsUploadOpen(true)} />
+    <div className={cn('h-screen w-full flex overflow-hidden', appThemeClasses[theme])}>
+      <Sidebar view={view} setView={setView} hasOpenReaderTabs={hasOpenTabs} onUpload={() => setIsUploadOpen(true)} theme={theme} />
 
       <div className="flex-1 flex flex-col overflow-hidden relative min-h-0">
-        <header className="h-20 px-12 flex items-center justify-between border-b border-black/5 bg-[#FDFCF8] shrink-0 relative z-30">
+        <header className={cn('h-20 px-12 flex items-center justify-between border-b shrink-0 relative z-30', topbarThemeClasses[theme])}>
           <div className="flex-1 max-w-xl">
             {view === 'bookshelf' || !displayBook ? (
               <div className="relative group">
                 <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-                  <span className="text-black/20 group-focus-within:text-black/50 transition-colors">
+                  <span className={cn('transition-colors', topbarIconClasses[theme])}>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                   </span>
                 </div>
@@ -508,7 +648,7 @@ export default function App() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="搜索我的书库..."
-                  className="w-full bg-[#f9f9fb] border-none rounded-xl py-2.5 pl-12 pr-4 text-xs font-bold tracking-tight focus:ring-1 focus:ring-black/5 placeholder:text-black/10 transition-all outline-none"
+                  className={cn('w-full border-none rounded-xl py-2.5 pl-12 pr-4 text-xs font-bold tracking-tight focus:ring-1 transition-all outline-none', topbarSearchClasses[theme])}
                 />
               </div>
             ) : null}
@@ -521,10 +661,11 @@ export default function App() {
           </div>
         </header>
 
-        <main className={cn('flex-1 relative flex overflow-hidden bg-[#F4F1EA] min-h-0', isResizing && 'pointer-events-none')}>
+        <main className={cn('flex-1 relative flex overflow-hidden min-h-0', appThemeClasses[theme], isResizing && 'pointer-events-none')}>
           {view === 'bookshelf' ? (
             <Bookshelf
               books={searchedBooks}
+              theme={theme}
               progress={progress}
               onUploadClick={() => setIsUploadOpen(true)}
               onDeleteBook={(book) => setPendingDeleteBook(book)}
@@ -537,7 +678,7 @@ export default function App() {
           ) : (
             <div className="flex-1 flex flex-col w-full min-h-0">
               <div
-                className="h-12 shrink-0 border-b border-black/5 bg-[#FDFCF8] flex items-center px-4 gap-2 overflow-x-auto relative z-20"
+                className={cn('h-12 shrink-0 border-b flex items-center px-4 gap-2 overflow-x-auto relative z-20', readerTabBarClasses[theme])}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => {
                   setDraggingBookId(null);
@@ -557,9 +698,7 @@ export default function App() {
                       <div
                       className={cn(
                         'group min-w-0 max-w-[280px] h-8 rounded-t-lg border px-3 flex items-center gap-2 cursor-pointer transition-all',
-                        isActive
-                          ? 'bg-white border-black/15 border-b-white shadow-sm'
-                          : 'bg-[#f3f0e8] border-black/10 hover:bg-[#ece8dd]',
+                        isActive ? readerTabActiveClasses[theme] : readerTabInactiveClasses[theme],
                         draggingBookId === book.id && 'opacity-60',
                       )}
                       draggable
@@ -613,12 +752,12 @@ export default function App() {
                     initial={{ opacity: 0, y: 6, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 6, scale: 0.98 }}
-                    className="fixed z-[260] w-44 rounded-xl bg-[#FDFCF8] border border-black/10 shadow-2xl overflow-hidden"
+                    className={cn('fixed z-[260] w-44 rounded-xl border shadow-2xl overflow-hidden', tabMenuClasses[theme])}
                     style={{ left: tabMenu.x, top: tabMenu.y }}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
-                      className="w-full text-left px-4 py-3 text-xs font-semibold hover:bg-black/[0.04]"
+                      className={cn('w-full text-left px-4 py-3 text-xs font-semibold', theme === 'dark' ? 'hover:bg-white/10' : 'hover:bg-black/[0.04]')}
                       onClick={() => {
                         closeOtherTabs(tabMenu.bookId);
                         setTabMenu(null);
@@ -627,7 +766,7 @@ export default function App() {
                       关闭其他标签
                     </button>
                     <button
-                      className="w-full text-left px-4 py-3 text-xs font-semibold hover:bg-black/[0.04]"
+                      className={cn('w-full text-left px-4 py-3 text-xs font-semibold', theme === 'dark' ? 'hover:bg-white/10' : 'hover:bg-black/[0.04]')}
                       onClick={() => {
                         closeTabsToRight(tabMenu.bookId);
                         setTabMenu(null);
@@ -647,11 +786,15 @@ export default function App() {
                 <ReaderPanel
                   book={displayBook}
                   currentPage={progress[displayBook.id] || 0}
+                  theme={theme}
+                  onThemeChange={setTheme}
                   paragraphAnchor={progressAnchors[displayBook.id]}
                   onPageChange={(page) => updateProgressForBook(displayBook.id, page)}
                   onAnchorChange={(anchor) => updateAnchorForBook(displayBook.id, anchor)}
+                  readingDurationSeconds={readingDurations[displayBook.id] || 0}
                   onAnnotate={(text) => setPendingQuote(text)}
                   isOverviewOpen={isOverviewOpen}
+                  onOpenOverview={() => setIsOverviewOpen(true)}
                   onCloseOverview={() => setIsOverviewOpen(false)}
                 />
               </section>
@@ -660,9 +803,10 @@ export default function App() {
                 <div className="w-px h-8 bg-gray-300 group-hover:bg-indigo-400" />
               </div>
 
-              <section style={{ width: `${100 - readerWidth}%` }} className="h-full min-h-0 bg-white border-l border-black/5 overflow-hidden">
+              <section style={{ width: `${100 - readerWidth}%` }} className={cn('h-full min-h-0 border-l overflow-hidden', chatSectionClasses[theme])}>
                 <ChatPanel
                   book={displayBook}
+                  theme={theme}
                   messages={chats[displayBook.id] || []}
                   onSendMessage={handleSendMessage}
                   onSummarize={handleSummarize}
@@ -688,7 +832,7 @@ export default function App() {
         </main>
       </div>
 
-      <AnimatePresence>{isUploadOpen && <UploadZone onClose={() => setIsUploadOpen(false)} onUpload={handleUpload} isUploading={isUploading} />}</AnimatePresence>
+      <AnimatePresence>{isUploadOpen && <UploadZone onClose={() => setIsUploadOpen(false)} onUpload={handleUpload} isUploading={isUploading} theme={theme} />}</AnimatePresence>
 
       <AnimatePresence>
         {pendingDeleteBook && (
@@ -702,18 +846,18 @@ export default function App() {
               initial={{ opacity: 0, y: 16, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 16, scale: 0.98 }}
-              className="w-full max-w-md bg-[#FDFCF8] border border-black/10 rounded-xl shadow-2xl overflow-hidden"
+              className={cn('w-full max-w-md border rounded-xl shadow-2xl overflow-hidden', theme === 'dark' ? 'bg-[#1A1A1A] border-white/12 text-[#D8D8D8]' : 'bg-[#FDFCF8] border-black/10 text-[#1A1A1A]')}
             >
-              <div className="px-6 py-5 border-b border-black/5">
-                <h3 className="font-serif text-xl font-bold text-[#1A1A1A]">删除书籍</h3>
-                <p className="mt-2 text-xs text-black/50 leading-relaxed">
+              <div className={cn('px-6 py-5 border-b', theme === 'dark' ? 'border-white/10' : 'border-black/5')}>
+                <h3 className="font-serif text-xl font-bold">删除书籍</h3>
+                <p className={cn('mt-2 text-xs leading-relaxed', theme === 'dark' ? 'text-white/60' : 'text-black/50')}>
                   确认删除《{pendingDeleteBook.title}》吗？此操作会同时清除阅读进度与聊天记录，且不可撤销。
                 </p>
               </div>
               <div className="px-6 py-4 flex items-center justify-end gap-3">
                 <button
                   onClick={() => setPendingDeleteBook(null)}
-                  className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider border border-black/10 rounded-lg hover:bg-black/[0.03]"
+                  className={cn('px-4 py-2 text-[11px] font-bold uppercase tracking-wider border rounded-lg', theme === 'dark' ? 'border-white/20 hover:bg-white/10' : 'border-black/10 hover:bg-black/[0.03]')}
                 >
                   取消
                 </button>
@@ -745,11 +889,11 @@ export default function App() {
               initial={{ opacity: 0, y: 16, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 16, scale: 0.98 }}
-              className="w-full max-w-md bg-[#FDFCF8] border border-black/10 rounded-xl shadow-2xl overflow-hidden"
+              className={cn('w-full max-w-md border rounded-xl shadow-2xl overflow-hidden', theme === 'dark' ? 'bg-[#1A1A1A] border-white/12 text-[#D8D8D8]' : 'bg-[#FDFCF8] border-black/10 text-[#1A1A1A]')}
             >
-              <div className="px-6 py-5 border-b border-black/5">
-                <h3 className="font-serif text-xl font-bold text-[#1A1A1A]">重复上传提醒</h3>
-                <p className="mt-2 text-xs text-black/50 leading-relaxed">
+              <div className={cn('px-6 py-5 border-b', theme === 'dark' ? 'border-white/10' : 'border-black/5')}>
+                <h3 className="font-serif text-xl font-bold">重复上传提醒</h3>
+                <p className={cn('mt-2 text-xs leading-relaxed', theme === 'dark' ? 'text-white/60' : 'text-black/50')}>
                   这本书已经在你的书架中。你可以直接打开已有条目继续阅读。
                 </p>
               </div>
@@ -759,7 +903,7 @@ export default function App() {
                     setDuplicateBook(null);
                     setIsUploadOpen(false);
                   }}
-                  className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider border border-black/10 rounded-lg hover:bg-black/[0.03]"
+                  className={cn('px-4 py-2 text-[11px] font-bold uppercase tracking-wider border rounded-lg', theme === 'dark' ? 'border-white/20 hover:bg-white/10' : 'border-black/10 hover:bg-black/[0.03]')}
                 >
                   仅关闭
                 </button>
@@ -773,7 +917,7 @@ export default function App() {
                       setView('reader');
                     }
                   }}
-                  className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider bg-black text-white rounded-lg hover:bg-[#111]"
+                  className={cn('px-4 py-2 text-[11px] font-bold uppercase tracking-wider rounded-lg', theme === 'dark' ? 'bg-[#E5E5E5] text-[#161616] hover:bg-white' : 'bg-black text-white hover:bg-[#111]')}
                 >
                   打开已有书籍
                 </button>

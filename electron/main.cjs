@@ -45,6 +45,7 @@ async function initDb() {
     cover TEXT,
     pdfPath TEXT,
     sourceFileName TEXT,
+    sourceFileSizeBytes INTEGER,
     pageCount INTEGER,
     fingerprint TEXT
   )`);
@@ -58,6 +59,11 @@ async function initDb() {
   } catch {
     // ignore when column already exists
   }
+  try {
+    await run('ALTER TABLE books ADD COLUMN sourceFileSizeBytes INTEGER');
+  } catch {
+    // ignore when column already exists
+  }
   await run(`CREATE TABLE IF NOT EXISTS chats (
     bookId TEXT PRIMARY KEY,
     messages TEXT NOT NULL,
@@ -67,10 +73,16 @@ async function initDb() {
     bookId TEXT PRIMARY KEY,
     currentPage INTEGER NOT NULL,
     paragraphAnchor INTEGER,
+    readingSeconds INTEGER,
     lastReadAt TEXT NOT NULL
   )`);
   try {
     await run('ALTER TABLE progress ADD COLUMN paragraphAnchor INTEGER');
+  } catch {
+    // ignore when column already exists
+  }
+  try {
+    await run('ALTER TABLE progress ADD COLUMN readingSeconds INTEGER');
   } catch {
     // ignore when column already exists
   }
@@ -205,17 +217,19 @@ app.whenReady().then(async () => {
     }
     const progress = {};
     const progressAnchors = {};
+    const readingDurations = {};
     for (const row of progressRows) {
       progress[row.bookId] = row.currentPage;
       if (typeof row.paragraphAnchor === 'number') progressAnchors[row.bookId] = row.paragraphAnchor;
+      if (typeof row.readingSeconds === 'number') readingDurations[row.bookId] = row.readingSeconds;
     }
-    return { books, chats, progress, progressAnchors };
+    return { books, chats, progress, progressAnchors, readingDurations };
   });
 
   ipcMain.handle('library:save-book', async (_event, book) => {
     await run(
-      `INSERT INTO books (id,title,author,content,createdAt,fileType,toc,cover,pdfPath,sourceFileName,pageCount,fingerprint)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO books (id,title,author,content,createdAt,fileType,toc,cover,pdfPath,sourceFileName,sourceFileSizeBytes,pageCount,fingerprint)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET
          title=excluded.title,
          author=excluded.author,
@@ -226,6 +240,7 @@ app.whenReady().then(async () => {
          cover=excluded.cover,
          pdfPath=excluded.pdfPath,
          sourceFileName=excluded.sourceFileName,
+         sourceFileSizeBytes=excluded.sourceFileSizeBytes,
          pageCount=excluded.pageCount,
          fingerprint=excluded.fingerprint`,
       [
@@ -239,6 +254,7 @@ app.whenReady().then(async () => {
         book.cover || null,
         book.pdfPath || null,
         book.sourceFileName || null,
+        book.sourceFileSizeBytes || null,
         book.pageCount || null,
         book.fingerprint || null,
       ],
@@ -275,12 +291,13 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('library:save-progress', async (_event, payload) => {
     await run(
-      `INSERT INTO progress (bookId,currentPage,paragraphAnchor,lastReadAt) VALUES (?,?,?,?)
+      `INSERT INTO progress (bookId,currentPage,paragraphAnchor,readingSeconds,lastReadAt) VALUES (?,?,?,?,?)
        ON CONFLICT(bookId) DO UPDATE SET
          currentPage=excluded.currentPage,
-         paragraphAnchor=excluded.paragraphAnchor,
+         paragraphAnchor=COALESCE(excluded.paragraphAnchor, progress.paragraphAnchor),
+         readingSeconds=COALESCE(excluded.readingSeconds, progress.readingSeconds, 0),
          lastReadAt=excluded.lastReadAt`,
-      [payload.bookId, payload.currentPage || 0, payload.paragraphAnchor ?? null, new Date().toISOString()],
+      [payload.bookId, payload.currentPage || 0, payload.paragraphAnchor ?? null, payload.readingSeconds ?? null, new Date().toISOString()],
     );
     return { ok: true };
   });

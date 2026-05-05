@@ -16,6 +16,7 @@ export interface Book {
   cover?: string;
   pdfPath?: string;
   sourceFileName?: string;
+  sourceFileSizeBytes?: number;
   pageCount?: number;
   fingerprint?: string;
 }
