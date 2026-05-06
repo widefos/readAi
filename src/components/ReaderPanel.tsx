@@ -97,11 +97,11 @@ export function ReaderPanel({
   const readingScrollHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textViewportRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
-  const pendingVerticalScrollPageRef = useRef<number | null>(null);
   const programmaticVerticalScrollRef = useRef(false);
   const restoredVerticalKeyRef = useRef<string | null>(null);
   const currentPageRef = useRef(currentPage);
   const hasAppliedCachedScrollRef = useRef(false);
+  const blockVerticalSyncUntilRef = useRef(0);
   const { pdfTotalPages, pdfError, openWithSystemViewer } = usePdfReaderEngine(book, currentPage, pdfScale, pdfCanvasRef);
 
   const isPdfBook = book.fileType === 'application/pdf';
@@ -130,11 +130,8 @@ export function ReaderPanel({
 
   useEffect(() => {
     hasAppliedCachedScrollRef.current = false;
-    if (!isVerticalPaging) {
-      setIsVerticalViewportReady(true);
-      return;
-    }
-    setIsVerticalViewportReady(false);
+    setIsVerticalViewportReady(true);
+    blockVerticalSyncUntilRef.current = Date.now() + 320;
   }, [book.id, isVerticalPaging]);
 
   useEffect(() => {
@@ -192,6 +189,11 @@ export function ReaderPanel({
       return allParagraphs.slice(start, end);
     })
   ), [textPageStarts, allParagraphs]);
+  const paginationCacheKey = `${book.id}|${fontSize}|${lineHeight}|${fontFamily}`;
+  const hasWarmPaginationCache = (() => {
+    const cached = textPaginationCache.get(paginationCacheKey);
+    return Boolean(cached && cached.length > 1);
+  })();
   const isVerticalPaginationStabilized = textPaginationReadyRef.current && !(allParagraphs.length > 1 && textPageStarts.length <= 1);
   const verticalPageMinHeight = Math.max(320, Math.floor(readerViewportHeight * 0.9));
   const calcPercent = (page: number, pages: number) => {
@@ -422,9 +424,6 @@ export function ReaderPanel({
 
   const safePageChange = (nextPage: number, source: 'jump' | 'scroll' = 'jump') => {
     if (nextPage === currentPage) return;
-    if (isVerticalPaging && source === 'jump') {
-      pendingVerticalScrollPageRef.current = nextPage;
-    }
     onPageChange(nextPage);
   };
 
@@ -483,11 +482,9 @@ export function ReaderPanel({
     if (!isVerticalPaging) return;
     if (!textPaginationReadyRef.current) return;
     if (allParagraphs.length > 1 && textPageStarts.length <= 1) return;
-    if (hasAppliedCachedScrollRef.current) return;
     const restoreKey = `${book.id}:vertical`;
     if (restoredVerticalKeyRef.current === restoreKey) return;
     restoredVerticalKeyRef.current = restoreKey;
-    pendingVerticalScrollPageRef.current = currentPageRef.current;
     debugLog('vertical:restore-request', {
       bookId: book.id,
       currentPage: currentPageRef.current,
@@ -511,100 +508,18 @@ export function ReaderPanel({
     const maxOffset = Math.max(0, target.clientHeight - 40);
     const restoreTop = target.offsetTop + Math.min(inPageOffset, maxOffset);
     hasAppliedCachedScrollRef.current = true;
-    pendingVerticalScrollPageRef.current = null;
     programmaticVerticalScrollRef.current = true;
     container.scrollTop = restoreTop;
     setIsVerticalViewportReady(true);
+    blockVerticalSyncUntilRef.current = Date.now() + 320;
     debugLog('vertical:apply-page-anchor', { bookId: book.id, currentPage, top: restoreTop, inPageOffset });
     window.setTimeout(() => {
       programmaticVerticalScrollRef.current = false;
     }, 60);
   }, [isVerticalPaging, book.id, allParagraphs.length, textPageStarts.length, currentPage]);
 
-  useEffect(() => {
-    if (!isVerticalPaging) return;
-    if (isVerticalViewportReady) return;
-    if (!textPaginationReadyRef.current) return;
-    if (allParagraphs.length > 1 && textPageStarts.length <= 1) return;
-    setIsVerticalViewportReady(true);
-  }, [isVerticalPaging, isVerticalViewportReady, allParagraphs.length, textPageStarts.length]);
-
-  useEffect(() => {
-    if (!isVerticalPaging) return;
-    if (isVerticalViewportReady) return;
-    const timer = window.setTimeout(() => {
-      setIsVerticalViewportReady(true);
-      debugLog('vertical:viewport-ready-timeout', { bookId: book.id });
-    }, 260);
-    return () => window.clearTimeout(timer);
-  }, [isVerticalPaging, isVerticalViewportReady, book.id]);
-
-  useEffect(() => {
-    if (!isVerticalPaging) return;
-    if (isVerticalViewportReady) return;
-    if (!isVerticalPaginationStabilized) return;
-    const container = contentRef.current;
-    if (!container) return;
-    let attempts = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const tryAlign = () => {
-      const target = verticalPageRefs.current[currentPage];
-      if (target) {
-        const inPage = verticalInPageOffsetCache.get(book.id);
-        const inPageOffset = inPage && inPage.page === currentPage ? Math.max(0, inPage.offset) : 0;
-        const maxOffset = Math.max(0, target.clientHeight - 40);
-        const top = target.offsetTop + Math.min(inPageOffset, maxOffset);
-        pendingVerticalScrollPageRef.current = null;
-        programmaticVerticalScrollRef.current = true;
-        container.scrollTop = top;
-        setIsVerticalViewportReady(true);
-        debugLog('vertical:align-before-show', { bookId: book.id, currentPage, top, attempts, inPageOffset });
-        window.setTimeout(() => {
-          programmaticVerticalScrollRef.current = false;
-        }, 80);
-        return;
-      }
-      attempts += 1;
-      if (attempts >= 25) {
-        setIsVerticalViewportReady(true);
-        debugLog('vertical:align-before-show-fallback', { bookId: book.id, currentPage, attempts });
-        return;
-      }
-      timer = setTimeout(tryAlign, 16);
-    };
-    tryAlign();
-    return () => {
-      if (timer) clearTimeout(timer);
-    };
-  }, [isVerticalPaging, isVerticalViewportReady, isVerticalPaginationStabilized, currentPage, book.id]);
-
-  useEffect(() => {
-    if (!isVerticalPaging) return;
-    const container = contentRef.current;
-    const target = verticalPageRefs.current[currentPage];
-    if (!container || !target) return;
-    if (pendingVerticalScrollPageRef.current !== currentPage) return;
-    const top = target.offsetTop;
-    const diff = Math.abs(container.scrollTop - top);
-    pendingVerticalScrollPageRef.current = null;
-    if (diff < 4) return;
-    programmaticVerticalScrollRef.current = true;
-    debugLog('vertical:restore-scroll', { currentPage, toTop: top, diff, scrollTop: container.scrollTop });
-    container.scrollTo({ top, behavior: 'smooth' });
-    window.setTimeout(() => {
-      programmaticVerticalScrollRef.current = false;
-    }, 260);
-  }, [currentPage, isVerticalPaging, textPages.length, readerViewportHeight]);
-
-  useEffect(() => {
-    if (!isVerticalPaging) return;
-    if (pendingVerticalScrollPageRef.current === null) return;
-    const timer = window.setTimeout(() => {
-      pendingVerticalScrollPageRef.current = null;
-      programmaticVerticalScrollRef.current = false;
-    }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [isVerticalPaging, currentPage, textPages.length]);
+  // Keep viewport visible at all times; avoid aggressive gate/timeout loops
+  // that can cause blank panels or extra jank when switching tabs.
 
   useEffect(() => {
     textPaginationReadyRef.current = isPdfBook;
@@ -642,14 +557,13 @@ export function ReaderPanel({
 
   useLayoutEffect(() => {
     if (isPdfBook) return;
-    const cacheKey = `${book.id}|${fontSize}|${lineHeight}|${fontFamily}`;
-    const cached = textPaginationCache.get(cacheKey);
+    const cached = textPaginationCache.get(paginationCacheKey);
     const initialStarts = cached && cached.length > 0 ? cached : [0];
     setTextPageStarts(initialStarts);
     textPageStartsRef.current = initialStarts;
     prevPageStartsRef.current = initialStarts;
     textPaginationReadyRef.current = Boolean(cached && cached.length > 0);
-  }, [book.id, fontSize, lineHeight, fontFamily, isPdfBook]);
+  }, [book.id, fontSize, lineHeight, fontFamily, isPdfBook, paginationCacheKey]);
 
   useEffect(() => {
     if (isPdfBook && resolvedPdfTotalPages <= 0) return;
@@ -734,7 +648,9 @@ export function ReaderPanel({
 
     const onWindowResize = () => scheduleRecalc(120);
 
-    scheduleRecalc(0);
+    // If we already have pagination cache for the same typography, avoid a
+    // synchronous full re-measure on tab switch to reduce visible stutter.
+    scheduleRecalc(hasWarmPaginationCache ? 140 : 0);
     const ro = new ResizeObserver(() => scheduleRecalc(100));
     if (textViewportRef.current) ro.observe(textViewportRef.current);
     window.addEventListener('resize', onWindowResize);
@@ -744,7 +660,7 @@ export function ReaderPanel({
       ro.disconnect();
       window.removeEventListener('resize', onWindowResize);
     };
-  }, [isPdfBook, allParagraphs, fontSize, lineHeight, fontFamily, book.id, readerViewportHeight]);
+  }, [isPdfBook, allParagraphs, fontSize, lineHeight, fontFamily, book.id, readerViewportHeight, hasWarmPaginationCache]);
 
   useEffect(() => {
     if (isPdfBook) return;
@@ -832,7 +748,7 @@ export function ReaderPanel({
     readingScrollHideTimerRef.current = setTimeout(() => setIsReadingScrollActive(false), 900);
     if (!isVerticalPaging) return;
     if (programmaticVerticalScrollRef.current) return;
-    if (pendingVerticalScrollPageRef.current !== null) return;
+    if (Date.now() < blockVerticalSyncUntilRef.current) return;
     if (!textPaginationReadyRef.current) return;
     const container = contentRef.current;
     if (!container) return;
@@ -842,15 +758,42 @@ export function ReaderPanel({
     const anchors = verticalPageRefs.current;
     const readyCount = anchors.filter(Boolean).length;
     if (readyCount <= 0) return;
-    const probeTop = container.scrollTop + 20;
-    let mappedPage = 0;
-    for (let i = 0; i < anchors.length; i++) {
-      const el = anchors[i];
-      if (!el) continue;
-      if (el.offsetTop <= probeTop) {
-        mappedPage = i;
+    const currentEl = anchors[currentPage];
+    const nextEl = anchors[currentPage + 1];
+    const prevEl = currentPage > 0 ? anchors[currentPage - 1] : null;
+    const hysteresis = 28;
+    let mappedPage = currentPage;
+    if (currentEl) {
+      const currentTop = currentEl.offsetTop;
+      const nextTop = nextEl ? nextEl.offsetTop : Number.POSITIVE_INFINITY;
+      const prevTop = prevEl ? prevEl.offsetTop : Number.NEGATIVE_INFINITY;
+      const scrollTop = container.scrollTop;
+
+      if (nextEl && scrollTop >= nextTop - hysteresis) {
+        mappedPage = currentPage + 1;
+      } else if (prevEl && scrollTop < currentTop - hysteresis) {
+        mappedPage = currentPage - 1;
+      } else if (scrollTop >= currentTop && scrollTop < nextTop) {
+        mappedPage = currentPage;
       } else {
-        break;
+        const probeTop = scrollTop + 20;
+        mappedPage = 0;
+        for (let i = 0; i < anchors.length; i++) {
+          const el = anchors[i];
+          if (!el) continue;
+          if (el.offsetTop <= probeTop) mappedPage = i;
+          else break;
+        }
+      }
+      if (scrollTop < prevTop) mappedPage = Math.max(0, currentPage - 1);
+    } else {
+      const probeTop = container.scrollTop + 20;
+      mappedPage = 0;
+      for (let i = 0; i < anchors.length; i++) {
+        const el = anchors[i];
+        if (!el) continue;
+        if (el.offsetTop <= probeTop) mappedPage = i;
+        else break;
       }
     }
     const mappedEl = anchors[mappedPage];
@@ -1193,7 +1136,6 @@ export function ReaderPanel({
         onScroll={handleReadingScroll}
         className={cn(
           'flex-1 min-h-0 px-12 pb-12 relative overflow-y-auto custom-scrollbar',
-          isVerticalPaging && (!isVerticalViewportReady || !isVerticalPaginationStabilized) && 'opacity-0 pointer-events-none',
           isReadingScrollActive && 'scrollbar-active',
         )}
       >
