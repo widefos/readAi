@@ -8,8 +8,10 @@ import { usePdfReaderEngine } from '../engines/pdfReaderEngine';
 
 const textPaginationCache = new Map<string, number[]>();
 const verticalScrollTopCache = new Map<string, number>();
+const verticalInPageOffsetCache = new Map<string, { page: number; offset: number }>();
 const TEXT_PAGE_HEIGHT_FACTOR = 1.35;
 const PAGE_TURN_DIRECTION_KEY = 'ai-reader-page-turn-direction';
+const VERTICAL_IN_PAGE_OFFSET_KEY = 'ai-reader-vertical-in-page-offset';
 const READER_DEBUG = process.env.NODE_ENV !== 'production';
 
 interface ReaderPanelProps {
@@ -53,6 +55,17 @@ export function ReaderPanel({
       data,
     });
   };
+  const persistInPageOffset = (bookId: string, page: number, offset: number) => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(VERTICAL_IN_PAGE_OFFSET_KEY);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, { page: number; offset: number }>) : {};
+      parsed[bookId] = { page, offset };
+      localStorage.setItem(VERTICAL_IN_PAGE_OFFSET_KEY, JSON.stringify(parsed));
+    } catch {
+      // ignore persistence errors
+    }
+  };
   const [pageTurnDirections, setPageTurnDirections] = useState<Record<string, 'horizontal' | 'vertical'>>(() => {
     if (typeof window === 'undefined') return {};
     try {
@@ -94,13 +107,26 @@ export function ReaderPanel({
   const isPdfBook = book.fileType === 'application/pdf';
   const pageTurnDirection = pageTurnDirections[book.id] ?? 'horizontal';
   const isVerticalPaging = pageTurnDirection === 'vertical' && !isPdfBook;
-  const cachedVerticalTop = verticalScrollTopCache.get(book.id);
   const verticalCacheMinTop = currentPage > 0 ? Math.max(120, Math.floor(readerViewportHeight * 0.35)) : 0;
-  const hasUsableCachedVerticalTop = cachedVerticalTop !== undefined && (currentPage === 0 || cachedVerticalTop >= verticalCacheMinTop);
 
   useEffect(() => {
     currentPageRef.current = currentPage;
   }, [currentPage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(VERTICAL_IN_PAGE_OFFSET_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, { page: number; offset: number }>;
+      const saved = parsed[book.id];
+      if (saved && typeof saved.page === 'number' && typeof saved.offset === 'number') {
+        verticalInPageOffsetCache.set(book.id, saved);
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }, [book.id]);
 
   useEffect(() => {
     hasAppliedCachedScrollRef.current = false;
@@ -108,7 +134,7 @@ export function ReaderPanel({
       setIsVerticalViewportReady(true);
       return;
     }
-    setIsVerticalViewportReady(!hasUsableCachedVerticalTop);
+    setIsVerticalViewportReady(false);
   }, [book.id, isVerticalPaging]);
 
   useEffect(() => {
@@ -458,7 +484,6 @@ export function ReaderPanel({
     if (!textPaginationReadyRef.current) return;
     if (allParagraphs.length > 1 && textPageStarts.length <= 1) return;
     if (hasAppliedCachedScrollRef.current) return;
-    if (hasUsableCachedVerticalTop) return;
     const restoreKey = `${book.id}:vertical`;
     if (restoredVerticalKeyRef.current === restoreKey) return;
     restoredVerticalKeyRef.current = restoreKey;
@@ -470,7 +495,7 @@ export function ReaderPanel({
       textPageStartsLength: textPageStarts.length,
       scrollTop: contentRef.current?.scrollTop ?? null,
     });
-  }, [isVerticalPaging, book.id, allParagraphs.length, textPageStarts.length, hasUsableCachedVerticalTop]);
+  }, [isVerticalPaging, book.id, allParagraphs.length, textPageStarts.length]);
 
   useLayoutEffect(() => {
     if (!isVerticalPaging) return;
@@ -479,17 +504,22 @@ export function ReaderPanel({
     if (hasAppliedCachedScrollRef.current) return;
     const container = contentRef.current;
     if (!container) return;
-    if (!hasUsableCachedVerticalTop || cachedVerticalTop === undefined) return;
+    const target = verticalPageRefs.current[currentPage];
+    if (!target) return;
+    const inPage = verticalInPageOffsetCache.get(book.id);
+    const inPageOffset = inPage && inPage.page === currentPage ? Math.max(0, inPage.offset) : 0;
+    const maxOffset = Math.max(0, target.clientHeight - 40);
+    const restoreTop = target.offsetTop + Math.min(inPageOffset, maxOffset);
     hasAppliedCachedScrollRef.current = true;
     pendingVerticalScrollPageRef.current = null;
     programmaticVerticalScrollRef.current = true;
-    container.scrollTop = cachedVerticalTop;
+    container.scrollTop = restoreTop;
     setIsVerticalViewportReady(true);
-    debugLog('vertical:apply-cached-scroll', { bookId: book.id, cachedTop: cachedVerticalTop });
+    debugLog('vertical:apply-page-anchor', { bookId: book.id, currentPage, top: restoreTop, inPageOffset });
     window.setTimeout(() => {
       programmaticVerticalScrollRef.current = false;
     }, 60);
-  }, [isVerticalPaging, book.id, allParagraphs.length, textPageStarts.length, hasUsableCachedVerticalTop, cachedVerticalTop, currentPage]);
+  }, [isVerticalPaging, book.id, allParagraphs.length, textPageStarts.length, currentPage]);
 
   useEffect(() => {
     if (!isVerticalPaging) return;
@@ -505,9 +535,48 @@ export function ReaderPanel({
     const timer = window.setTimeout(() => {
       setIsVerticalViewportReady(true);
       debugLog('vertical:viewport-ready-timeout', { bookId: book.id });
-    }, 180);
+    }, 260);
     return () => window.clearTimeout(timer);
   }, [isVerticalPaging, isVerticalViewportReady, book.id]);
+
+  useEffect(() => {
+    if (!isVerticalPaging) return;
+    if (isVerticalViewportReady) return;
+    if (!isVerticalPaginationStabilized) return;
+    const container = contentRef.current;
+    if (!container) return;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tryAlign = () => {
+      const target = verticalPageRefs.current[currentPage];
+      if (target) {
+        const inPage = verticalInPageOffsetCache.get(book.id);
+        const inPageOffset = inPage && inPage.page === currentPage ? Math.max(0, inPage.offset) : 0;
+        const maxOffset = Math.max(0, target.clientHeight - 40);
+        const top = target.offsetTop + Math.min(inPageOffset, maxOffset);
+        pendingVerticalScrollPageRef.current = null;
+        programmaticVerticalScrollRef.current = true;
+        container.scrollTop = top;
+        setIsVerticalViewportReady(true);
+        debugLog('vertical:align-before-show', { bookId: book.id, currentPage, top, attempts, inPageOffset });
+        window.setTimeout(() => {
+          programmaticVerticalScrollRef.current = false;
+        }, 80);
+        return;
+      }
+      attempts += 1;
+      if (attempts >= 25) {
+        setIsVerticalViewportReady(true);
+        debugLog('vertical:align-before-show-fallback', { bookId: book.id, currentPage, attempts });
+        return;
+      }
+      timer = setTimeout(tryAlign, 16);
+    };
+    tryAlign();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [isVerticalPaging, isVerticalViewportReady, isVerticalPaginationStabilized, currentPage, book.id]);
 
   useEffect(() => {
     if (!isVerticalPaging) return;
@@ -542,6 +611,10 @@ export function ReaderPanel({
   }, [book.id, isPdfBook]);
 
   useEffect(() => {
+    if (!isPdfBook) {
+      verticalPageRefs.current = [];
+      textPaginationReadyRef.current = false;
+    }
     lastAppliedExternalAnchorRef.current = null;
     lastEmittedAnchorRef.current = null;
   }, [book.id]);
@@ -567,14 +640,15 @@ export function ReaderPanel({
     }
   }, [textPageStarts, isPdfBook]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isPdfBook) return;
     const cacheKey = `${book.id}|${fontSize}|${lineHeight}|${fontFamily}`;
     const cached = textPaginationCache.get(cacheKey);
-    if (cached && cached.length > 0) {
-      setTextPageStarts(cached);
-      textPageStartsRef.current = cached;
-    }
+    const initialStarts = cached && cached.length > 0 ? cached : [0];
+    setTextPageStarts(initialStarts);
+    textPageStartsRef.current = initialStarts;
+    prevPageStartsRef.current = initialStarts;
+    textPaginationReadyRef.current = Boolean(cached && cached.length > 0);
   }, [book.id, fontSize, lineHeight, fontFamily, isPdfBook]);
 
   useEffect(() => {
@@ -779,6 +853,12 @@ export function ReaderPanel({
         break;
       }
     }
+    const mappedEl = anchors[mappedPage];
+    if (mappedEl) {
+      const inPageOffset = Math.max(0, container.scrollTop - mappedEl.offsetTop);
+      verticalInPageOffsetCache.set(book.id, { page: mappedPage, offset: inPageOffset });
+      persistInPageOffset(book.id, mappedPage, inPageOffset);
+    }
     if (mappedPage !== currentPage) {
       debugLog('vertical:scroll-sync-page', {
         fromPage: currentPage,
@@ -797,6 +877,12 @@ export function ReaderPanel({
       if (!container) return;
       if (!(currentPage > 0 && container.scrollTop < verticalCacheMinTop)) {
         verticalScrollTopCache.set(book.id, container.scrollTop);
+      }
+      const target = verticalPageRefs.current[currentPage];
+      if (target) {
+        const inPageOffset = Math.max(0, container.scrollTop - target.offsetTop);
+        verticalInPageOffsetCache.set(book.id, { page: currentPage, offset: inPageOffset });
+        persistInPageOffset(book.id, currentPage, inPageOffset);
       }
     };
   }, [book.id, isVerticalPaging, currentPage]);
@@ -1107,7 +1193,7 @@ export function ReaderPanel({
         onScroll={handleReadingScroll}
         className={cn(
           'flex-1 min-h-0 px-12 pb-12 relative overflow-y-auto custom-scrollbar',
-          isVerticalPaging && hasUsableCachedVerticalTop && (!isVerticalViewportReady || !isVerticalPaginationStabilized) && 'opacity-0 pointer-events-none',
+          isVerticalPaging && (!isVerticalViewportReady || !isVerticalPaginationStabilized) && 'opacity-0 pointer-events-none',
           isReadingScrollActive && 'scrollbar-active',
         )}
       >
