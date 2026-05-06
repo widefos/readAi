@@ -1,6 +1,7 @@
 ﻿const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  debugLog: (payload) => ipcRenderer.invoke('debug:log', payload),
   saveBookFile: (payload) => ipcRenderer.invoke('books:save-file', payload),
   readBookFile: (fullPath) => ipcRenderer.invoke('books:read-file', fullPath),
   getPdfUrl: (fullPath) => ipcRenderer.invoke('books:get-pdf-url', fullPath),

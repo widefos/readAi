@@ -190,6 +190,15 @@ app.whenReady().then(async () => {
   await startNextServer();
   createWindow();
 
+  ipcMain.handle('debug:log', async (_event, payload) => {
+    const ts = new Date().toISOString();
+    const tag = payload?.tag || 'DEBUG';
+    const event = payload?.event || 'event';
+    const data = payload?.data ?? {};
+    console.log(`[${ts}] [${tag}] ${event}`, data);
+    return { ok: true };
+  });
+
   ipcMain.handle('books:save-file', async (_event, payload) => {
     const booksDir = await ensureBooksDir();
     const safeName = `${Date.now()}-${payload.fileName}`.replace(/[^a-zA-Z0-9._-]/g, '_');

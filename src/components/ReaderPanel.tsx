@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { Book, TocItem } from '../types';
 import { createReaderEngine } from '../engines/readerEngine';
 import { motion, AnimatePresence } from 'motion/react';
@@ -7,7 +7,10 @@ import { ChevronRight, ChevronDown, Settings, List, Sparkles, X as CloseIcon, Cl
 import { usePdfReaderEngine } from '../engines/pdfReaderEngine';
 
 const textPaginationCache = new Map<string, number[]>();
+const verticalScrollTopCache = new Map<string, number>();
 const TEXT_PAGE_HEIGHT_FACTOR = 1.35;
+const PAGE_TURN_DIRECTION_KEY = 'ai-reader-page-turn-direction';
+const READER_DEBUG = process.env.NODE_ENV !== 'production';
 
 interface ReaderPanelProps {
   book: Book;
@@ -40,6 +43,25 @@ export function ReaderPanel({
   onCloseOverview,
   onBookmarksChange,
 }: ReaderPanelProps) {
+  const debugLog = (event: string, payload?: Record<string, unknown>) => {
+    if (!READER_DEBUG) return;
+    const data = payload || {};
+    console.log('[READER_DEBUG]', event, data);
+    void window.electronAPI?.debugLog?.({
+      tag: 'READER_DEBUG',
+      event,
+      data,
+    });
+  };
+  const [pageTurnDirections, setPageTurnDirections] = useState<Record<string, 'horizontal' | 'vertical'>>(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = localStorage.getItem(PAGE_TURN_DIRECTION_KEY);
+      return raw ? (JSON.parse(raw) as Record<string, 'horizontal' | 'vertical'>) : {};
+    } catch {
+      return {};
+    }
+  });
   const [fontSize, setFontSize] = useState(20);
   const [lineHeight, setLineHeight] = useState(1.8);
   const [fontFamily, setFontFamily] = useState<'sans' | 'serif' | 'mono'>('serif');
@@ -55,13 +77,48 @@ export function ReaderPanel({
   const [bookmarkDraftNote, setBookmarkDraftNote] = useState('');
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null);
   const [isReadingScrollActive, setIsReadingScrollActive] = useState(false);
+  const [readerViewportHeight, setReaderViewportHeight] = useState(0);
+  const [isVerticalViewportReady, setIsVerticalViewportReady] = useState(true);
   const contentRef = useRef<HTMLDivElement>(null);
+  const verticalPageRefs = useRef<Array<HTMLElement | null>>([]);
   const readingScrollHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textViewportRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
+  const pendingVerticalScrollPageRef = useRef<number | null>(null);
+  const programmaticVerticalScrollRef = useRef(false);
+  const restoredVerticalKeyRef = useRef<string | null>(null);
+  const currentPageRef = useRef(currentPage);
+  const hasAppliedCachedScrollRef = useRef(false);
   const { pdfTotalPages, pdfError, openWithSystemViewer } = usePdfReaderEngine(book, currentPage, pdfScale, pdfCanvasRef);
 
   const isPdfBook = book.fileType === 'application/pdf';
+  const pageTurnDirection = pageTurnDirections[book.id] ?? 'horizontal';
+  const isVerticalPaging = pageTurnDirection === 'vertical' && !isPdfBook;
+  const cachedVerticalTop = verticalScrollTopCache.get(book.id);
+  const verticalCacheMinTop = currentPage > 0 ? Math.max(120, Math.floor(readerViewportHeight * 0.35)) : 0;
+  const hasUsableCachedVerticalTop = cachedVerticalTop !== undefined && (currentPage === 0 || cachedVerticalTop >= verticalCacheMinTop);
+
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  useEffect(() => {
+    hasAppliedCachedScrollRef.current = false;
+    if (!isVerticalPaging) {
+      setIsVerticalViewportReady(true);
+      return;
+    }
+    setIsVerticalViewportReady(!hasUsableCachedVerticalTop);
+  }, [book.id, isVerticalPaging]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(PAGE_TURN_DIRECTION_KEY, JSON.stringify(pageTurnDirections));
+    } catch {
+      // ignore persistence errors
+    }
+  }, [pageTurnDirections]);
   const resolvedPdfTotalPages = pdfTotalPages > 0 ? pdfTotalPages : (book.pageCount ?? 0);
   const engine = createReaderEngine(book, resolvedPdfTotalPages);
   const allParagraphs = useMemo(() => book.content.split('\n').filter((p) => p.trim().length > 0), [book.content]);
@@ -103,6 +160,14 @@ export function ReaderPanel({
         const end = textPageStarts[currentPage + 1] ?? allParagraphs.length;
         return allParagraphs.slice(start, end);
       })();
+  const textPages = useMemo(() => (
+    textPageStarts.map((start, index) => {
+      const end = textPageStarts[index + 1] ?? allParagraphs.length;
+      return allParagraphs.slice(start, end);
+    })
+  ), [textPageStarts, allParagraphs]);
+  const isVerticalPaginationStabilized = textPaginationReadyRef.current && !(allParagraphs.length > 1 && textPageStarts.length <= 1);
+  const verticalPageMinHeight = Math.max(320, Math.floor(readerViewportHeight * 0.9));
   const calcPercent = (page: number, pages: number) => {
     if (pages <= 1) return 100;
     const ratio = page / (pages - 1);
@@ -265,6 +330,18 @@ export function ReaderPanel({
     dark: 'bg-white text-[#111] border-white',
     eye: 'bg-[#1db69e] text-[#05323b] border-[#2ad3b6]',
   } as const;
+  const verticalPageShellClasses = {
+    light: 'border-black/8',
+    paper: 'border-black/10',
+    dark: 'border-white/12',
+    eye: 'border-[#20b39b]/25',
+  } as const;
+  const verticalPageFooterClasses = {
+    light: 'border-black/10',
+    paper: 'border-black/10',
+    dark: 'border-white/12',
+    eye: 'border-[#20b39b]/25',
+  } as const;
   const tocRailClasses = {
     light: 'border-black/16',
     paper: 'border-[#6d5d4b]/24',
@@ -317,8 +394,11 @@ export function ReaderPanel({
     return lo;
   }
 
-  const safePageChange = (nextPage: number) => {
+  const safePageChange = (nextPage: number, source: 'jump' | 'scroll' = 'jump') => {
     if (nextPage === currentPage) return;
+    if (isVerticalPaging && source === 'jump') {
+      pendingVerticalScrollPageRef.current = nextPage;
+    }
     onPageChange(nextPage);
   };
 
@@ -361,6 +441,7 @@ export function ReaderPanel({
   useEffect(() => {
     const container = contentRef.current;
     if (!container) return;
+    if (isVerticalPaging) return;
 
     const delayMs = animationTypeRef.current === 'none'
       ? 0
@@ -370,11 +451,114 @@ export function ReaderPanel({
     }, delayMs);
 
     return () => window.clearTimeout(timer);
-  }, [currentPage]);
+  }, [currentPage, isVerticalPaging]);
+
+  useEffect(() => {
+    if (!isVerticalPaging) return;
+    if (!textPaginationReadyRef.current) return;
+    if (allParagraphs.length > 1 && textPageStarts.length <= 1) return;
+    if (hasAppliedCachedScrollRef.current) return;
+    if (hasUsableCachedVerticalTop) return;
+    const restoreKey = `${book.id}:vertical`;
+    if (restoredVerticalKeyRef.current === restoreKey) return;
+    restoredVerticalKeyRef.current = restoreKey;
+    pendingVerticalScrollPageRef.current = currentPageRef.current;
+    debugLog('vertical:restore-request', {
+      bookId: book.id,
+      currentPage: currentPageRef.current,
+      totalPages,
+      textPageStartsLength: textPageStarts.length,
+      scrollTop: contentRef.current?.scrollTop ?? null,
+    });
+  }, [isVerticalPaging, book.id, allParagraphs.length, textPageStarts.length, hasUsableCachedVerticalTop]);
+
+  useLayoutEffect(() => {
+    if (!isVerticalPaging) return;
+    if (!textPaginationReadyRef.current) return;
+    if (allParagraphs.length > 1 && textPageStarts.length <= 1) return;
+    if (hasAppliedCachedScrollRef.current) return;
+    const container = contentRef.current;
+    if (!container) return;
+    if (!hasUsableCachedVerticalTop || cachedVerticalTop === undefined) return;
+    hasAppliedCachedScrollRef.current = true;
+    pendingVerticalScrollPageRef.current = null;
+    programmaticVerticalScrollRef.current = true;
+    container.scrollTop = cachedVerticalTop;
+    setIsVerticalViewportReady(true);
+    debugLog('vertical:apply-cached-scroll', { bookId: book.id, cachedTop: cachedVerticalTop });
+    window.setTimeout(() => {
+      programmaticVerticalScrollRef.current = false;
+    }, 60);
+  }, [isVerticalPaging, book.id, allParagraphs.length, textPageStarts.length, hasUsableCachedVerticalTop, cachedVerticalTop, currentPage]);
+
+  useEffect(() => {
+    if (!isVerticalPaging) return;
+    if (isVerticalViewportReady) return;
+    if (!textPaginationReadyRef.current) return;
+    if (allParagraphs.length > 1 && textPageStarts.length <= 1) return;
+    setIsVerticalViewportReady(true);
+  }, [isVerticalPaging, isVerticalViewportReady, allParagraphs.length, textPageStarts.length]);
+
+  useEffect(() => {
+    if (!isVerticalPaging) return;
+    if (isVerticalViewportReady) return;
+    const timer = window.setTimeout(() => {
+      setIsVerticalViewportReady(true);
+      debugLog('vertical:viewport-ready-timeout', { bookId: book.id });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [isVerticalPaging, isVerticalViewportReady, book.id]);
+
+  useEffect(() => {
+    if (!isVerticalPaging) return;
+    const container = contentRef.current;
+    const target = verticalPageRefs.current[currentPage];
+    if (!container || !target) return;
+    if (pendingVerticalScrollPageRef.current !== currentPage) return;
+    const top = target.offsetTop;
+    const diff = Math.abs(container.scrollTop - top);
+    pendingVerticalScrollPageRef.current = null;
+    if (diff < 4) return;
+    programmaticVerticalScrollRef.current = true;
+    debugLog('vertical:restore-scroll', { currentPage, toTop: top, diff, scrollTop: container.scrollTop });
+    container.scrollTo({ top, behavior: 'smooth' });
+    window.setTimeout(() => {
+      programmaticVerticalScrollRef.current = false;
+    }, 260);
+  }, [currentPage, isVerticalPaging, textPages.length, readerViewportHeight]);
+
+  useEffect(() => {
+    if (!isVerticalPaging) return;
+    if (pendingVerticalScrollPageRef.current === null) return;
+    const timer = window.setTimeout(() => {
+      pendingVerticalScrollPageRef.current = null;
+      programmaticVerticalScrollRef.current = false;
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [isVerticalPaging, currentPage, textPages.length]);
 
   useEffect(() => {
     textPaginationReadyRef.current = isPdfBook;
   }, [book.id, isPdfBook]);
+
+  useEffect(() => {
+    lastAppliedExternalAnchorRef.current = null;
+    lastEmittedAnchorRef.current = null;
+  }, [book.id]);
+
+  useEffect(() => {
+    const container = contentRef.current;
+    if (!container) return;
+    const syncHeight = () => setReaderViewportHeight(container.clientHeight);
+    syncHeight();
+    const ro = new ResizeObserver(syncHeight);
+    ro.observe(container);
+    window.addEventListener('resize', syncHeight);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', syncHeight);
+    };
+  }, []);
 
   useEffect(() => {
     textPageStartsRef.current = textPageStarts;
@@ -408,8 +592,9 @@ export function ReaderPanel({
 
     const recalc = () => {
       const viewport = textViewportRef.current;
+      const container = contentRef.current;
       if (!viewport) return;
-      const maxHeight = viewport.clientHeight;
+      const maxHeight = container?.clientHeight ?? viewport.clientHeight;
       const effectiveMaxHeight = Math.max(1, maxHeight * TEXT_PAGE_HEIGHT_FACTOR);
       const width = viewport.clientWidth;
       if (maxHeight <= 0 || width <= 0 || allParagraphs.length === 0) {
@@ -485,7 +670,7 @@ export function ReaderPanel({
       ro.disconnect();
       window.removeEventListener('resize', onWindowResize);
     };
-  }, [isPdfBook, allParagraphs, fontSize, lineHeight, fontFamily, book.id]);
+  }, [isPdfBook, allParagraphs, fontSize, lineHeight, fontFamily, book.id, readerViewportHeight]);
 
   useEffect(() => {
     if (isPdfBook) return;
@@ -506,23 +691,27 @@ export function ReaderPanel({
 
   useEffect(() => {
     if (isPdfBook || paragraphAnchor === undefined) return;
+    if (isVerticalPaging) return;
     if (!textPaginationReadyRef.current) return;
     if (reflowAnchorRef.current !== null) return;
-    if (currentPage !== 0) return;
     if (lastAppliedExternalAnchorRef.current === paragraphAnchor) return;
+    const starts = textPageStartsRef.current;
+    if (starts.length <= 1 && allParagraphs.length > 1) return;
+    const targetPage = findPageByParagraphIndex(paragraphAnchor, starts);
     lastAppliedExternalAnchorRef.current = paragraphAnchor;
-    const targetPage = findPageByParagraphIndex(paragraphAnchor, textPageStartsRef.current);
-    if (targetPage !== currentPage) safePageChange(targetPage);
-  }, [paragraphAnchor, isPdfBook, currentPage, onPageChange]);
+    if (targetPage !== currentPage) safePageChange(targetPage, 'jump');
+  }, [paragraphAnchor, isPdfBook, isVerticalPaging, currentPage, allParagraphs.length]);
 
   useEffect(() => {
     if (isPdfBook || !onAnchorChange) return;
+    if (!textPaginationReadyRef.current) return;
+    if (allParagraphs.length > 1 && textPageStarts.length <= 1) return;
     if (reflowAnchorRef.current !== null) return;
     const anchor = textPageStarts[Math.min(currentPage, textPageStarts.length - 1)] ?? 0;
     if (lastEmittedAnchorRef.current === anchor) return;
     lastEmittedAnchorRef.current = anchor;
     onAnchorChange(anchor);
-  }, [currentPage, textPageStarts, isPdfBook, onAnchorChange]);
+  }, [currentPage, textPageStarts, isPdfBook, onAnchorChange, allParagraphs.length]);
 
 
   const handleMouseUp = () => {
@@ -567,7 +756,61 @@ export function ReaderPanel({
     setIsReadingScrollActive(true);
     if (readingScrollHideTimerRef.current) clearTimeout(readingScrollHideTimerRef.current);
     readingScrollHideTimerRef.current = setTimeout(() => setIsReadingScrollActive(false), 900);
+    if (!isVerticalPaging) return;
+    if (programmaticVerticalScrollRef.current) return;
+    if (pendingVerticalScrollPageRef.current !== null) return;
+    if (!textPaginationReadyRef.current) return;
+    const container = contentRef.current;
+    if (!container) return;
+    if (!(currentPage > 0 && container.scrollTop < verticalCacheMinTop)) {
+      verticalScrollTopCache.set(book.id, container.scrollTop);
+    }
+    const anchors = verticalPageRefs.current;
+    const readyCount = anchors.filter(Boolean).length;
+    if (readyCount <= 0) return;
+    const probeTop = container.scrollTop + 20;
+    let mappedPage = 0;
+    for (let i = 0; i < anchors.length; i++) {
+      const el = anchors[i];
+      if (!el) continue;
+      if (el.offsetTop <= probeTop) {
+        mappedPage = i;
+      } else {
+        break;
+      }
+    }
+    if (mappedPage !== currentPage) {
+      debugLog('vertical:scroll-sync-page', {
+        fromPage: currentPage,
+        toPage: mappedPage,
+        scrollTop: container.scrollTop,
+        totalPages,
+      });
+      safePageChange(mappedPage, 'scroll');
+    }
   };
+
+  useEffect(() => {
+    return () => {
+      if (!isVerticalPaging) return;
+      const container = contentRef.current;
+      if (!container) return;
+      if (!(currentPage > 0 && container.scrollTop < verticalCacheMinTop)) {
+        verticalScrollTopCache.set(book.id, container.scrollTop);
+      }
+    };
+  }, [book.id, isVerticalPaging, currentPage]);
+
+  useEffect(() => {
+    debugLog('reader:enter-or-update', {
+      bookId: book.id,
+      mode: isVerticalPaging ? 'vertical' : 'horizontal',
+      currentPage,
+      totalPages,
+      textPageStartsLength: textPageStarts.length,
+      scrollTop: contentRef.current?.scrollTop ?? null,
+    });
+  }, [book.id, isVerticalPaging, currentPage, totalPages, textPageStarts.length]);
 
   const getAnimationProps = () => {
     if (animationType === 'none') return { initial: false, animate: { opacity: 0.9 }, exit: { opacity: 0.9 }, transition: { duration: 0 } };
@@ -864,6 +1107,7 @@ export function ReaderPanel({
         onScroll={handleReadingScroll}
         className={cn(
           'flex-1 min-h-0 px-12 pb-12 relative overflow-y-auto custom-scrollbar',
+          isVerticalPaging && hasUsableCachedVerticalTop && (!isVerticalViewportReady || !isVerticalPaginationStabilized) && 'opacity-0 pointer-events-none',
           isReadingScrollActive && 'scrollbar-active',
         )}
       >
@@ -900,6 +1144,35 @@ export function ReaderPanel({
               ) : (
                 <canvas ref={pdfCanvasRef} className="max-w-full shadow-lg border border-black/5 bg-white" />
               )}
+            </div>
+          ) : isVerticalPaging ? (
+            <div className={cn(fontClasses[fontFamily], 'text-justify space-y-8')} style={{ fontSize: `${fontSize}px`, lineHeight }}>
+              {textPages.map((pageParagraphs, pageIndex) => (
+                <section
+                  key={`vertical-page-${pageIndex}`}
+                  ref={(el) => {
+                    verticalPageRefs.current[pageIndex] = el;
+                  }}
+                  className={cn(
+                    'rounded-xl px-2 py-4 transition-colors border',
+                    verticalPageShellClasses[theme],
+                    pageIndex === currentPage && 'ring-1 ring-black/10 dark:ring-white/10',
+                  )}
+                  style={{ minHeight: verticalPageMinHeight }}
+                >
+                  <div className="space-y-6">
+                    {pageParagraphs.map((p, i) => (
+                      <p key={`${pageIndex}-${i}`} className={cn('tracking-wide', pageIndex === 0 && i === 0 ? 'first-letter:text-5xl first-letter:font-bold first-letter:mr-3 first-letter:float-left first-letter:mt-2' : 'indent-8')}>
+                        {p}
+                      </p>
+                    ))}
+                  </div>
+                  <div className={cn('mt-8 pt-3 border-t text-[10px] opacity-45 font-bold tracking-widest uppercase', verticalPageFooterClasses[theme])}>
+                    第 {pageIndex + 1} 页
+                  </div>
+                </section>
+              ))}
+              {textPages.length === 0 && <div className="flex flex-col items-center justify-center py-32 opacity-30 italic"><p>这本书还没有可显示的文本内容...</p></div>}
             </div>
           ) : (
             <AnimatePresence mode="wait">
@@ -952,6 +1225,7 @@ export function ReaderPanel({
                       <div><label className={cn('text-[9px] font-bold uppercase tracking-widest mb-3 block', settingsLabelClasses[theme])}>字体</label><div className="flex gap-1">{(['serif', 'sans', 'mono'] as const).map((f) => <button key={f} onClick={() => { lockReflowAnchorToCurrentPage(); setFontFamily(f); }} className={cn('flex-1 py-2 text-[9px] font-bold uppercase border transition-colors', fontFamily === f ? settingsOptionActiveClasses[theme] : settingsOptionIdleClasses[theme])}>{f === 'serif' ? '宋体' : f === 'sans' ? '黑体' : '等宽'}</button>)}</div></div>
                       <div><label className={cn('text-[9px] font-bold uppercase tracking-widest mb-3 block', settingsLabelClasses[theme])}>阅读主题</label><div className="grid grid-cols-2 gap-1">{(['light', 'paper', 'dark', 'eye'] as const).map((t) => <button key={t} onClick={() => onThemeChange(t)} className={cn('py-2 text-[9px] font-bold uppercase border transition-colors', theme === t ? settingsOptionActiveClasses[theme] : settingsOptionIdleClasses[theme])}>{t === 'light' ? '明亮' : t === 'paper' ? '纸张' : t === 'dark' ? '深色' : '护眼'}</button>)}</div></div>
                       <div><label className={cn('text-[9px] font-bold uppercase tracking-widest mb-3 block', settingsLabelClasses[theme])}>翻页动画</label><div className="grid grid-cols-2 gap-1">{(['fade', 'slide', 'slide-up', 'none'] as const).map((a) => <button key={a} onClick={() => setAnimationType(a)} className={cn('py-2 text-[9px] font-bold uppercase border transition-colors', animationType === a ? settingsOptionActiveClasses[theme] : settingsOptionIdleClasses[theme])}>{a === 'fade' ? '渐变' : a === 'slide' ? '平移' : a === 'slide-up' ? '上滑' : '无'}</button>)}</div></div>
+                      <div><label className={cn('text-[9px] font-bold uppercase tracking-widest mb-3 block', settingsLabelClasses[theme])}>翻页模式</label><div className="grid grid-cols-2 gap-1"><button onClick={() => setPageTurnDirections((prev) => ({ ...prev, [book.id]: 'horizontal' }))} className={cn('py-2 text-[9px] font-bold uppercase border transition-colors', pageTurnDirection === 'horizontal' ? settingsOptionActiveClasses[theme] : settingsOptionIdleClasses[theme])}>水平翻页</button><button onClick={() => setPageTurnDirections((prev) => ({ ...prev, [book.id]: 'vertical' }))} className={cn('py-2 text-[9px] font-bold uppercase border transition-colors', pageTurnDirection === 'vertical' ? settingsOptionActiveClasses[theme] : settingsOptionIdleClasses[theme])}>垂直翻页</button></div>{isPdfBook && <p className={cn('mt-2 text-[10px]', settingsLabelClasses[theme])}>PDF 当前仍按单页渲染，垂直模式主要用于文本无缝滚动。</p>}</div>
                       <div><label className={cn('text-[9px] font-bold uppercase tracking-widest mb-3 block', settingsLabelClasses[theme])}>动画速度 ({animationSpeed}s)</label><input type="range" min="0" max="2" step="0.1" value={animationSpeed} onChange={(e) => setAnimationSpeed(Number(e.target.value))} className={cn('w-full h-1 appearance-none pointer cursor-pointer', settingsSliderClasses[theme])} /></div>
                     </div>
                   </motion.div>
@@ -964,3 +1238,4 @@ export function ReaderPanel({
     </div>
   );
 }
+

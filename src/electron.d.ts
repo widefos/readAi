@@ -3,6 +3,7 @@
 declare global {
   interface Window {
     electronAPI?: {
+      debugLog: (payload: { tag?: string; event: string; data?: Record<string, unknown> }) => Promise<{ ok: boolean }>;
       saveBookFile: (payload: { fileName: string; bytes: number[] }) => Promise<{ path: string }>;
       readBookFile: (fullPath: string) => Promise<number[]>;
       getPdfUrl: (fullPath: string) => Promise<string>;
