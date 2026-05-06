@@ -20,6 +20,7 @@ export interface Book {
   pageCount?: number;
   fingerprint?: string;
   bookmarks?: BookBookmark[];
+  annotations?: BookAnnotation[];
 }
 
 export interface BookBookmark {
@@ -28,6 +29,15 @@ export interface BookBookmark {
   name?: string;
   note?: string;
   paragraphAnchor?: number;
+  createdAt: string;
+}
+
+export interface BookAnnotation {
+  id: string;
+  page: number;
+  paragraphAnchor?: number;
+  quote: string;
+  note?: string;
   createdAt: string;
 }
 

@@ -12,7 +12,13 @@ type CachedPdf = {
 const pdfCache = new Map<string, CachedPdf>();
 const pdfLoadingCache = new Map<string, Promise<CachedPdf>>();
 
-export function usePdfReaderEngine(book: Book, currentPage: number, pdfScale: number, canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+export function usePdfReaderEngine(
+  book: Book,
+  currentPage: number,
+  pdfScale: number,
+  canvasEl: HTMLCanvasElement | null,
+  renderTrigger?: string,
+) {
   const initialCached = book.fileType === 'application/pdf' && book.pdfPath ? pdfCache.get(book.pdfPath) : undefined;
   const [pdfDoc, setPdfDoc] = useState<any>(initialCached?.doc ?? null);
   const [pdfTotalPages, setPdfTotalPages] = useState(initialCached?.totalPages ?? 0);
@@ -89,7 +95,7 @@ export function usePdfReaderEngine(book: Book, currentPage: number, pdfScale: nu
   }, [book.fileType, book.pdfPath]);
 
   useEffect(() => {
-    if (book.fileType !== 'application/pdf' || !pdfDoc || !canvasRef.current || pdfTotalPages <= 0) return;
+    if (book.fileType !== 'application/pdf' || !pdfDoc || !canvasEl || pdfTotalPages <= 0) return;
     let cancelled = false;
 
     const render = async () => {
@@ -107,7 +113,7 @@ export function usePdfReaderEngine(book: Book, currentPage: number, pdfScale: nu
       if (cancelled) return;
 
       const viewport = page.getViewport({ scale: pdfScale });
-      const canvas = canvasRef.current!;
+      const canvas = canvasEl;
       const context = canvas.getContext('2d');
       if (!context) return;
       canvas.width = viewport.width;
@@ -136,7 +142,7 @@ export function usePdfReaderEngine(book: Book, currentPage: number, pdfScale: nu
         renderTaskRef.current = null;
       }
     };
-  }, [book.fileType, canvasRef, pdfDoc, pdfTotalPages, currentPage, pdfScale]);
+  }, [book.fileType, canvasEl, pdfDoc, pdfTotalPages, currentPage, pdfScale, renderTrigger]);
 
   const openWithSystemViewer = async () => {
     if (!book.pdfPath || !window.electronAPI?.openPdfInDefaultViewer) return;
@@ -147,6 +153,7 @@ export function usePdfReaderEngine(book: Book, currentPage: number, pdfScale: nu
   };
 
   return {
+    pdfDoc,
     pdfTotalPages,
     pdfError,
     openWithSystemViewer,

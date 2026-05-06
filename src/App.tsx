@@ -1,6 +1,6 @@
 ﻿import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from './lib/utils';
-import { Book, ChatMessage } from './types';
+import { Book, ChatMessage, BookAnnotation } from './types';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel } from './components/ReaderPanel';
 import { ChatPanel } from './components/ChatPanel';
@@ -350,6 +350,7 @@ export default function App() {
         pageCount: imported.pageCount,
         fingerprint: imported.fingerprint,
         bookmarks: [],
+        annotations: [],
       };
 
       setBooks((prev) => [newBook, ...prev]);
@@ -535,6 +536,25 @@ export default function App() {
       await window.electronAPI.saveBook(nextBook);
     } else {
       const nextBooks = books.map((b) => (b.id === bookId ? { ...b, bookmarks } : b));
+      localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
+    }
+  }, [books]);
+
+  const updateAnnotationsForBook = useCallback(async (bookId: string, annotations: BookAnnotation[]) => {
+    let nextBook: Book | null = null;
+    setBooks((prev) =>
+      prev.map((b) => {
+        if (b.id !== bookId) return b;
+        nextBook = { ...b, annotations };
+        return nextBook;
+      }),
+    );
+    if (!nextBook) return;
+
+    if (window.electronAPI?.saveBook) {
+      await window.electronAPI.saveBook(nextBook);
+    } else {
+      const nextBooks = books.map((b) => (b.id === bookId ? { ...b, annotations } : b));
       localStorage.setItem(BOOKS_KEY, JSON.stringify(nextBooks));
     }
   }, [books]);
@@ -894,6 +914,7 @@ export default function App() {
                   onOpenOverview={() => setIsOverviewOpen(true)}
                   onCloseOverview={() => setIsOverviewOpen(false)}
                   onBookmarksChange={(bookmarks) => void updateBookmarksForBook(displayBook.id, bookmarks)}
+                  onAnnotationsChange={(annotations) => void updateAnnotationsForBook(displayBook.id, annotations)}
                 />
               </section>
 
